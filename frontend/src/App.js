@@ -11,20 +11,20 @@ import { toast } from "sonner";
 import { Separator } from "./components/ui/separator";
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "./components/ui/table";
 import { Textarea } from "./components/ui/textarea";
-import { Printer, LockKeyhole, ChefHat, ListOrdered, FileText, Save } from "lucide-react";
+import { Printer, LockKeyhole, ChefHat, ListOrdered, FileText, Save, Trash2 } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL; // do not hardcode
 const API = `${BACKEND_URL}/api`;
 
 function useAdminMode() {
-  const [mode, setMode] = useState("clerk"); // clerk | admin-limited | admin-full
+  const [mode, setMode] = useState("none"); // none until login; then clerk | admin-limited | admin-full
   return { mode, setMode };
 }
 
 function LoginPanel({ onMode }) {
   const [staffCode, setStaffCode] = useState("");
   const [password, setPassword] = useState("");
-  const isAdminCode = (staffCode || "").trim().toUpperCase() === "SHI";
 
   const submit = async () => {
     try {
@@ -36,7 +36,8 @@ function LoginPanel({ onMode }) {
         toast.success("Clerk mode");
       }
     } catch (e) {
-      toast.error(e?.response?.data?.detail || "Login failed");
+      onMode("none");
+      toast.error(e?.response?.data?.detail || "Invalid login");
     }
   };
 
@@ -48,14 +49,12 @@ function LoginPanel({ onMode }) {
       <CardContent className="space-y-3">
         <div className="grid grid-cols-3 items-center gap-3">
           <Label className="text-sm">3-letter ID</Label>
-          <Input placeholder="e.g., SHI" className="col-span-2" value={staffCode} onChange={e => setStaffCode(e.target.value)} />
+          <Input placeholder="e.g., SHI or CLK" className="col-span-2" value={staffCode} onChange={e => setStaffCode(e.target.value)} />
         </div>
-        {isAdminCode && (
-          <div className="grid grid-cols-3 items-center gap-3">
-            <Label className="text-sm">Password (admin)</Label>
-            <Input type="password" placeholder="admin password" className="col-span-2" value={password} onChange={e => setPassword(e.target.value)} />
-          </div>
-        )}
+        <div className="grid grid-cols-3 items-center gap-3">
+          <Label className="text-sm">Password</Label>
+          <Input type="password" placeholder="required for admin" className="col-span-2" value={password} onChange={e => setPassword(e.target.value)} />
+        </div>
         <div className="flex justify-end">
           <Button onClick={submit} className="px-5">Enter</Button>
         </div>
@@ -113,10 +112,9 @@ function FoodMenu() {
 
 function Billing({ settings }) {
   const [tableNo, setTableNo] = useState("");
-  const [partyNo, setPartyNo] = useState("");
+  const [partyNo, setPartyNo] = useState("1"); // default to 1
   const [waiterNo, setWaiterNo] = useState("");
   const [section, setSection] = useState("G"); // AC or G
-  const [billNumber, setBillNumber] = useState("");
 
   const [entryCode, setEntryCode] = useState("");
   const [qty, setQty] = useState(1);
@@ -170,7 +168,7 @@ function Billing({ settings }) {
     }
     try {
       const payload = {
-        header: { table_no: tableNo, party_no: partyNo, waiter_no: waiterNo, section, bill_number: billNumber || null },
+        header: { table_no: tableNo, party_no: partyNo, waiter_no: waiterNo, section },
         item_codes: lines.map(l => l.code),
         quantities: lines.map(l => l.quantity)
       };
@@ -182,7 +180,7 @@ function Billing({ settings }) {
       try { localStorage.setItem("lastBill", JSON.stringify(res.data)); } catch {}
       try { localStorage.setItem("settings", JSON.stringify(settings || {})); } catch {}
       setTimeout(() => window.print(), 200);
-      setLines([]); setBillNumber("");
+      setLines([]);
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Failed to create bill");
     }
@@ -197,7 +195,7 @@ function Billing({ settings }) {
           <CardTitle className="flex items-center gap-2"><FileText size={18}/> Billing</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="grid grid-cols-6 gap-3">
+          <div className="grid grid-cols-5 gap-3">
             <div className="col-span-1">
               <Label>Table No</Label>
               <Input value={tableNo} onChange={e => setTableNo(e.target.value)} />
@@ -213,10 +211,6 @@ function Billing({ settings }) {
             <div className="col-span-1">
               <Label>Section (AC/G)</Label>
               <Input value={section} onChange={e => setSection(e.target.value.toUpperCase().startsWith('A') ? 'AC' : 'G')} />
-            </div>
-            <div className="col-span-2">
-              <Label>Bill No (optional)</Label>
-              <Input placeholder="auto if empty" value={billNumber} onChange={e => setBillNumber(e.target.value)} />
             </div>
           </div>
 
@@ -394,6 +388,98 @@ function SettingsEditor({ settings, onChange, canEdit }) {
   );
 }
 
+function CredentialsManager() {
+  const [rows, setRows] = useState([]);
+  const [form, setForm] = useState({ staff_code: "", role: "clerk", password: "", password_l1: "", password_root: "", active: true });
+
+  const load = async () => {
+    try { const res = await axios.get(`${API}/credentials`); setRows(res.data); } catch {}
+  };
+  useEffect(() => { load(); }, []);
+
+  const add = async () => {
+    try {
+      const payload = { ...form, staff_code: (form.staff_code || '').toUpperCase() };
+      const res = await axios.post(`${API}/credentials`, payload);
+      toast.success("Credential added");
+      setForm({ staff_code: "", role: "clerk", password: "", password_l1: "", password_root: "", active: true });
+      load();
+    } catch (e) { toast.error(e?.response?.data?.detail || "Failed to add"); }
+  };
+  const del = async (id) => { try { await axios.delete(`${API}/credentials/${id}`); toast.success("Deleted"); load(); } catch {} };
+  const toggleActive = async (id, active) => { try { await axios.put(`${API}/credentials/${id}`, { active: !active }); load(); } catch {} };
+
+  return (
+    <Card className="bg-white/80 backdrop-blur">
+      <CardHeader>
+        <CardTitle>Credentials</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="grid grid-cols-6 gap-2 items-end">
+          <div className="col-span-1">
+            <Label>Code</Label>
+            <Input value={form.staff_code} onChange={e => setForm({ ...form, staff_code: e.target.value })} placeholder="3 letters" />
+          </div>
+          <div className="col-span-1">
+            <Label>Role</Label>
+            <Select value={form.role} onValueChange={(v) => setForm({ ...form, role: v })}>
+              <SelectTrigger><SelectValue placeholder="Role" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="clerk">clerk</SelectItem>
+                <SelectItem value="admin">admin</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {form.role === 'clerk' ? (
+            <div className="col-span-2">
+              <Label>Clerk Password (optional)</Label>
+              <Input value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} />
+            </div>
+          ) : (
+            <>
+              <div className="col-span-2">
+                <Label>Admin L1 Password</Label>
+                <Input value={form.password_l1} onChange={e => setForm({ ...form, password_l1: e.target.value })} />
+              </div>
+              <div className="col-span-2">
+                <Label>Admin Root Password</Label>
+                <Input value={form.password_root} onChange={e => setForm({ ...form, password_root: e.target.value })} />
+              </div>
+            </>
+          )}
+          <div className="col-span-1 flex justify-end">
+            <Button onClick={add}>Add</Button>
+          </div>
+        </div>
+
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Code</TableHead>
+              <TableHead>Role</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map(r => (
+              <TableRow key={r.id}>
+                <TableCell>{r.staff_code}</TableCell>
+                <TableCell>{r.role}</TableCell>
+                <TableCell>{r.active ? 'active' : 'inactive'}</TableCell>
+                <TableCell className="text-right flex gap-2 justify-end">
+                  <Button variant="secondary" onClick={() => toggleActive(r.id, r.active)}>{r.active ? 'Disable' : 'Enable'}</Button>
+                  <Button variant="destructive" onClick={() => del(r.id)} className="gap-1"><Trash2 size={14}/> Delete</Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
+}
+
 function AdminPanel({ mode, settings, onSettings }) {
   const isAdmin = mode === "admin-limited" || mode === "admin-full";
   if (!isAdmin) return null;
@@ -411,7 +497,10 @@ function AdminPanel({ mode, settings, onSettings }) {
         </CardContent>
       </Card>
       {mode === 'admin-full' && (
-        <SettingsEditor settings={settings} onChange={onSettings} canEdit={true} />
+        <>
+          <SettingsEditor settings={settings} onChange={onSettings} canEdit={true} />
+          <CredentialsManager />
+        </>
       )}
     </div>
   );
@@ -446,30 +535,33 @@ function App() {
           <p className="text-sm text-neutral-600">Charminar, Hyderabad</p>
         </div>
 
-        <div className="mb-6">
-          <LoginPanel onMode={setMode} />
-        </div>
-
-        <Tabs defaultValue="billing" className="">
-          <TabsList className="bg-white/70 backdrop-blur border">
-            <TabsTrigger value="billing" className="gap-1"><FileText size={14}/> Billing</TabsTrigger>
-            <TabsTrigger value="menu" className="gap-1"><ListOrdered size={14}/> Food Menu</TabsTrigger>
-            {isAdmin && (
-              <TabsTrigger value="admin" className="gap-1"><LockKeyhole size={14}/> Admin</TabsTrigger>
-            )}
-          </TabsList>
-          <TabsContent value="billing" className="mt-4">
-            <Billing settings={settings} />
-          </TabsContent>
-          <TabsContent value="menu" className="mt-4">
-            <FoodMenu />
-          </TabsContent>
-          {isAdmin && (
-            <TabsContent value="admin" className="mt-4">
-              <AdminPanel mode={mode} settings={settings} onSettings={(s) => { setSettings(s); if (typeof window !== 'undefined') window.__settings__ = s; }} />
-            </TabsContent>
-          )}
-        </Tabs>
+        {/* Gate: show only login until authenticated */}
+        {mode === 'none' ? (
+          <div className="max-w-3xl"><LoginPanel onMode={setMode} /></div>
+        ) : (
+          <>
+            <Tabs defaultValue="billing" className="">
+              <TabsList className="bg-white/70 backdrop-blur border">
+                <TabsTrigger value="billing" className="gap-1"><FileText size={14}/> Billing</TabsTrigger>
+                <TabsTrigger value="menu" className="gap-1"><ListOrdered size={14}/> Food Menu</TabsTrigger>
+                {isAdmin && (
+                  <TabsTrigger value="admin" className="gap-1"><LockKeyhole size={14}/> Admin</TabsTrigger>
+                )}
+              </TabsList>
+              <TabsContent value="billing" className="mt-4">
+                <Billing settings={settings} />
+              </TabsContent>
+              <TabsContent value="menu" className="mt-4">
+                <FoodMenu />
+              </TabsContent>
+              {isAdmin && (
+                <TabsContent value="admin" className="mt-4">
+                  <AdminPanel mode={mode} settings={settings} onSettings={(s) => { setSettings(s); if (typeof window !== 'undefined') window.__settings__ = s; }} />
+                </TabsContent>
+              )}
+            </Tabs>
+          </>
+        )}
       </div>
     </div>
   );

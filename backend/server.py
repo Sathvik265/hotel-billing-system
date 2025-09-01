@@ -28,7 +28,7 @@ app = FastAPI()
 api = APIRouter(prefix="/api")
 
 # Constants
-HOTEL_NAME = "Udupi Anand Bhavan, Charminar, Hyderabad"
+DEFAULT_HOTEL_NAME = "Udupi Anand Bhavan, Charminar, Hyderabad"
 TZ = ZoneInfo(os.environ.get('APP_TIMEZONE', 'Asia/Kolkata'))
 
 # Models
@@ -62,7 +62,7 @@ class BillHeader(BaseModel):
     party_no: str
     waiter_no: str
     section: Literal['AC', 'G']
-    bill_number: Optional[str] = None
+    bill_number: Optional[str] = None  # populated by server
 
 class Bill(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -77,14 +77,14 @@ class Bill(BaseModel):
 
 class StaffLoginRequest(BaseModel):
     staff_code: str  # e.g., SHI
-    password: Optional[str] = None  # only for admin entry
+    password: Optional[str] = None  # required for admin, optional for clerk
 
 class StaffLoginResponse(BaseModel):
     mode: Literal['clerk', 'admin-limited', 'admin-full']
 
 class Settings(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    hotel_name: str = HOTEL_NAME
+    hotel_name: str = DEFAULT_HOTEL_NAME
     gstin: Optional[str] = ""
     phone: Optional[str] = ""
     address: Optional[str] = ""
@@ -94,6 +94,31 @@ class SettingsUpdate(BaseModel):
     gstin: Optional[str] = None
     phone: Optional[str] = None
     address: Optional[str] = None
+
+# Credentials models
+class Credential(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    staff_code: str
+    role: Literal['clerk', 'admin']
+    password: Optional[str] = None           # for clerks (optional)
+    password_l1: Optional[str] = None        # for admin limited
+    password_root: Optional[str] = None      # for admin full
+    active: bool = True
+
+class CredentialCreate(BaseModel):
+    staff_code: str
+    role: Literal['clerk', 'admin']
+    password: Optional[str] = None
+    password_l1: Optional[str] = None
+    password_root: Optional[str] = None
+    active: bool = True
+
+class CredentialUpdate(BaseModel):
+    role: Optional[Literal['clerk', 'admin']] = None
+    password: Optional[str] = None
+    password_l1: Optional[str] = None
+    password_root: Optional[str] = None
+    active: Optional[bool] = None
 
 # Helpers
 async def seed_menu_if_empty():
@@ -114,6 +139,18 @@ async def seed_menu_if_empty():
     ]
     await db.menu.insert_many([s.model_dump() for s in seed])
 
+async def seed_credentials_if_empty():
+    count = await db.credentials.count_documents({})
+    if count == 0:
+        # Default admin and a sample clerk
+        admin = Credential(
+            staff_code='SHI', role='admin', password_l1='udupi-l1', password_root='udupi-root', active=True
+        )
+        clerk = Credential(
+            staff_code='CLK', role='clerk', password=None, active=True
+        )
+        await db.credentials.insert_many([admin.model_dump(), clerk.model_dump()])
+
 async def get_menu_by_code(code: str) -> Optional[MenuItem]:
     code_upper = code.strip().upper()
     item = await db.menu.find_one({"$or": [{"alpha_code": code_upper}, {"numeric_code": code_upper}]})
@@ -130,7 +167,6 @@ async def get_settings_doc() -> Settings:
     return Settings(**doc)
 
 async def save_settings(update: SettingsUpdate) -> Settings:
-    # Build update dict excluding None
     upd = {k: v for k, v in update.model_dump().items() if v is not None}
     doc = await db.settings.find_one_and_update(
         {},
@@ -139,7 +175,6 @@ async def save_settings(update: SettingsUpdate) -> Settings:
         return_document=ReturnDocument.AFTER,
     )
     if not doc:
-        # created new
         new_doc = Settings(**{**Settings().model_dump(), **upd})
         await db.settings.insert_one(new_doc.model_dump())
         return new_doc
@@ -149,23 +184,11 @@ async def save_settings(update: SettingsUpdate) -> Settings:
 def now_local_iso() -> str:
     return datetime.now(TZ).isoformat()
 
-async def next_bill_number() -> str:
-    # daily counter collection: bill_counters with date_key and seq
-    today = datetime.now(TZ).strftime('%Y%m%d')
-    doc = await db.bill_counters.find_one_and_update(
-        {"date_key": today},
-        {"$inc": {"seq": 1}},
-        upsert=True,
-        return_document=ReturnDocument.AFTER
-    )
-    seq = doc.get('seq', 1)
-    return f"{today}-{seq:03d}"
-
 # Startup tasks
 @app.on_event('startup')
 async def on_startup():
     await seed_menu_if_empty()
-    # ensure settings exists
+    await seed_credentials_if_empty()
     await get_settings_doc()
 
 # Routes
@@ -173,32 +196,71 @@ async def on_startup():
 async def root():
     return {"message": "Hotel Billing API running"}
 
+# Authentication based on stored credentials
 @api.post('/auth/login', response_model=StaffLoginResponse)
 async def staff_login(payload: StaffLoginRequest):
-    staff_code = payload.staff_code.strip().upper()
-    # Admin code is SHI as provided
-    if staff_code == 'SHI':
-        # Two-level passwords
-        if payload.password is None or payload.password == '':
-            # Enter as clerk unless password supplied
-            return StaffLoginResponse(mode='clerk')
-        if payload.password == 'udupi-l1':
+    code = payload.staff_code.strip().upper()
+    cred_doc = await db.credentials.find_one({"staff_code": code, "active": True})
+    if not cred_doc:
+        raise HTTPException(status_code=401, detail='Invalid credentials')
+
+    cred = Credential(**cred_doc)
+    if cred.role == 'admin':
+        if not payload.password:
+            raise HTTPException(status_code=401, detail='Password required')
+        if cred.password_l1 and payload.password == cred.password_l1:
             return StaffLoginResponse(mode='admin-limited')
-        if payload.password == 'udupi-root':
+        if cred.password_root and payload.password == cred.password_root:
             return StaffLoginResponse(mode='admin-full')
         raise HTTPException(status_code=401, detail='Invalid admin password')
-    # Non-admin codes become clerks silently
-    return StaffLoginResponse(mode='clerk')
+    else:
+        # clerk
+        if cred.password:
+            if payload.password != cred.password:
+                raise HTTPException(status_code=401, detail='Invalid clerk password')
+        return StaffLoginResponse(mode='clerk')
 
-# Settings endpoints
-@api.get('/settings', response_model=Settings)
-async def get_settings():
-    return await get_settings_doc()
+# Credentials management (no auth in MVP; UI limits to admin-full)
+@api.get('/credentials', response_model=List[Credential])
+async def list_credentials():
+    rows = await db.credentials.find({}).sort("staff_code", 1).to_list(length=500)
+    return [Credential(**r) for r in rows]
 
-@api.put('/settings', response_model=Settings)
-async def update_settings(payload: SettingsUpdate):
-    # NOTE: In MVP, no backend auth enforcement; frontend limits to admin-full
-    return await save_settings(payload)
+@api.post('/credentials', response_model=Credential)
+async def create_credential(payload: CredentialCreate):
+    code = payload.staff_code.strip().upper()
+    exists = await db.credentials.find_one({"staff_code": code})
+    if exists:
+        raise HTTPException(status_code=409, detail='Staff code already exists')
+    cred = Credential(
+        staff_code=code,
+        role=payload.role,
+        password=payload.password,
+        password_l1=payload.password_l1,
+        password_root=payload.password_root,
+        active=payload.active,
+    )
+    await db.credentials.insert_one(cred.model_dump())
+    return cred
+
+@api.put('/credentials/{cred_id}', response_model=Credential)
+async def update_credential(cred_id: str, payload: CredentialUpdate):
+    upd = {k: v for k, v in payload.model_dump().items() if v is not None}
+    doc = await db.credentials.find_one_and_update(
+        {"id": cred_id},
+        {"$set": upd},
+        return_document=ReturnDocument.AFTER,
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail='Credential not found')
+    return Credential(**doc)
+
+@api.delete('/credentials/{cred_id}')
+async def delete_credential(cred_id: str):
+    res = await db.credentials.delete_one({"id": cred_id})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail='Credential not found')
+    return {"status": "deleted"}
 
 @api.get('/menu', response_model=List[MenuItem])
 async def list_menu():
@@ -230,7 +292,12 @@ async def lookup_menu(code: str):
     return item
 
 class BillCreateRequest(BaseModel):
-    header: BillHeader
+    class Header(BaseModel):
+        table_no: str
+        party_no: str
+        waiter_no: str
+        section: Literal['AC', 'G']
+    header: Header
     item_codes: List[str]
     quantities: List[int]
 
@@ -239,7 +306,6 @@ async def create_bill(payload: BillCreateRequest):
     if len(payload.item_codes) != len(payload.quantities):
         raise HTTPException(status_code=400, detail='Item codes and quantities mismatch')
 
-    # Determine pricing column based on section G/AC
     price_field = 'price_ac' if payload.header.section == 'AC' else 'price_general'
 
     items: List[BillItem] = []
@@ -259,8 +325,8 @@ async def create_bill(payload: BillCreateRequest):
     tax_amount = round(subtotal * tax_percent / 100.0, 2)
     grand_total = round(subtotal + tax_amount, 2)
 
-    # Bill number handling: auto if not provided
-    bill_no = payload.header.bill_number or await next_bill_number()
+    # Bill number policy: same as waiter number (set by system)
+    bill_no = payload.header.waiter_no
 
     settings = await get_settings_doc()
 
@@ -278,7 +344,7 @@ async def create_bill(payload: BillCreateRequest):
         tax_amount=tax_amount,
         grand_total=grand_total,
         created_at=now_local_iso(),
-        hotel_name=settings.hotel_name or HOTEL_NAME,
+        hotel_name=settings.hotel_name or DEFAULT_HOTEL_NAME,
     )
 
     await db.bills.insert_one(bill.model_dump())
