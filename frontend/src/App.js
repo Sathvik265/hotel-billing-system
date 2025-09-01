@@ -154,10 +154,13 @@ function Billing() {
       };
       const res = await axios.post(`${API}/bill`, payload);
       toast.success("Bill created");
-      // Open print preview
+      // Persist print data for reliability across print dialogs
       window.printBillData = res.data; // attach to window for print template
-      setTimeout(() => window.print(), 100);
-      // reset form
+      window.__lastBill__ = res.data;
+      try { localStorage.setItem("lastBill", JSON.stringify(res.data)); } catch {}
+      // Open print preview after small delay to ensure DOM render
+      setTimeout(() => window.print(), 200);
+      // reset form but keep print data available
       setLines([]); setBillNumber("");
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Failed to create bill");
