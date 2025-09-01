@@ -487,6 +487,7 @@ function CredentialsManager() {
                 <TableCell>{r.active ? 'active' : 'inactive'}</TableCell>
                 <TableCell className="text-right flex gap-2 justify-end">
                   <Button variant="secondary" onClick={() => toggleActive(r.id, r.active)}>{r.active ? 'Disable' : 'Enable'}</Button>
+                  <Button onClick={() => editRow(r)}>Edit</Button>
                   <Button variant="destructive" onClick={() => del(r.id)} className="gap-1"><Trash2 size={14}/> Delete</Button>
                 </TableCell>
               </TableRow>
