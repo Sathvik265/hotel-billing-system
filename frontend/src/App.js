@@ -99,7 +99,7 @@ function FoodMenu() {
                 <TableCell>{it.alpha_code}</TableCell>
                 <TableCell>{it.numeric_code}</TableCell>
                 <TableCell>₹ {it.price_fixed}</TableCell>
-                <TableCell>₹ {it.price_general}</}</TableCell>
+                <TableCell>₹ {it.price_general}</TableCell>
                 <TableCell>₹ {it.price_ac}</TableCell>
               </TableRow>
             ))}
