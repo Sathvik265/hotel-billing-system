@@ -408,6 +408,24 @@ function CredentialsManager() {
   };
   const del = async (id) => { try { await axios.delete(`${API}/credentials/${id}`); toast.success("Deleted"); load(); } catch {} };
   const toggleActive = async (id, active) => { try { await axios.put(`${API}/credentials/${id}`, { active: !active }); load(); } catch {} };
+  const editRow = async (r) => {
+    try {
+      const newRole = window.prompt("Role (clerk/admin)", r.role) || r.role;
+      let payload = { role: newRole };
+      if (newRole === 'admin') {
+        const l1 = window.prompt("Admin L1 password (blank to keep)", "");
+        const root = window.prompt("Admin ROOT password (blank to keep)", "");
+        if (l1 !== null && l1 !== '') payload.password_l1 = l1;
+        if (root !== null && root !== '') payload.password_root = root;
+      } else {
+        const pw = window.prompt("Clerk password (blank to clear)", r.password || "");
+        if (pw !== null) payload.password = pw; // allow empty to clear
+      }
+      await axios.put(`${API}/credentials/${r.id}`, payload);
+      toast.success("Updated");
+      load();
+    } catch (e) { toast.error(e?.response?.data?.detail || "Failed to update"); }
+  };
 
   return (
     <Card className="bg-white/80 backdrop-blur">
