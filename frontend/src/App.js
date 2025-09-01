@@ -11,7 +11,7 @@ import { toast } from "sonner";
 import { Separator } from "./components/ui/separator";
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "./components/ui/table";
 import { Textarea } from "./components/ui/textarea";
-import { Printer, LockKeyhole, ChefHat, ListOrdered, FileText, Save, Trash2 } from "lucide-react";
+import { Printer, LockKeyhole, ChefHat, ListOrdered, FileText, Save, Trash2, Minus, Plus } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL; // do not hardcode
@@ -99,7 +99,7 @@ function FoodMenu() {
                 <TableCell>{it.alpha_code}</TableCell>
                 <TableCell>{it.numeric_code}</TableCell>
                 <TableCell>₹ {it.price_fixed}</TableCell>
-                <TableCell>₹ {it.price_general}</TableCell>
+                <TableCell>₹ {it.price_general}</}</TableCell>
                 <TableCell>₹ {it.price_ac}</TableCell>
               </TableRow>
             ))}
@@ -110,18 +110,28 @@ function FoodMenu() {
   );
 }
 
-function Billing({ settings }) {
-  const [tableNo, setTableNo] = useState("");
-  const [partyNo, setPartyNo] = useState("1"); // default to 1
-  const [waiterNo, setWaiterNo] = useState("");
-  const [section, setSection] = useState("G"); // AC or G
-
+function Billing({ settings, draft, setDraft }) {
   const [entryCode, setEntryCode] = useState("");
   const [qty, setQty] = useState(1);
-  const [lines, setLines] = useState([]);
-
   const [preview, setPreview] = useState(null);
   const debounceRef = useRef();
+
+  const header = draft.header;
+  const lines = draft.lines || [];
+
+  // Auto-fill waiter and bill number when table changes
+  const onHeaderChange = (patch) => {
+    const h = { ...header, ...patch };
+    if (patch.table_no !== undefined) {
+      h.waiter_no = patch.table_no;
+      // Default bill no mirrors waiter no unless user had already set it
+      if (!h.bill_number || h.bill_number === header.bill_number) {
+        h.bill_number = patch.table_no;
+      }
+    }
+    setDraft({ ...draft, header: h });
+    try { localStorage.setItem('billingDraft', JSON.stringify({ ...draft, header: h })); } catch {}
+  };
 
   useEffect(() => {
     if (!entryCode || entryCode.trim().length < 2) { setPreview(null); return; }
@@ -130,9 +140,7 @@ function Billing({ settings }) {
       try {
         const res = await axios.get(`${API}/menu/lookup/${entryCode}`);
         setPreview(res.data);
-      } catch {
-        setPreview(null);
-      }
+      } catch { setPreview(null); }
     }, 250);
     return () => debounceRef.current && clearTimeout(debounceRef.current);
   }, [entryCode]);
@@ -142,15 +150,34 @@ function Billing({ settings }) {
     try {
       const res = await axios.get(`${API}/menu/lookup/${entryCode}`);
       const item = res.data;
-      const unit = section === 'AC' ? item.price_ac : item.price_general;
+      const unit = header.section === 'AC' ? item.price_ac : item.price_general;
       const newLine = { code: entryCode.toUpperCase(), name: item.name, quantity: qty, unit_price: unit, line_total: +(unit * qty).toFixed(2) };
-      setLines(prev => [...prev, newLine]);
-      setEntryCode("");
-      setQty(1);
-      setPreview(null);
+      const updated = { ...draft, lines: [...lines, newLine] };
+      setDraft(updated);
+      try { localStorage.setItem('billingDraft', JSON.stringify(updated)); } catch {}
+      setEntryCode(""); setQty(1); setPreview(null);
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Item not found");
     }
+  };
+
+  const updateQty = (index, newQty) => {
+    if (newQty < 1) newQty = 1;
+    const updatedLines = lines.map((l, i) => {
+      if (i !== index) return l;
+      const unit = l.unit_price;
+      return { ...l, quantity: newQty, line_total: +(unit * newQty).toFixed(2) };
+    });
+    const updated = { ...draft, lines: updatedLines };
+    setDraft(updated);
+    try { localStorage.setItem('billingDraft', JSON.stringify(updated)); } catch {}
+  };
+
+  const removeLine = (index) => {
+    const updatedLines = lines.filter((_, i) => i !== index);
+    const updated = { ...draft, lines: updatedLines };
+    setDraft(updated);
+    try { localStorage.setItem('billingDraft', JSON.stringify(updated)); } catch {}
   };
 
   const subtotal = useMemo(() => lines.reduce((s, l) => s + l.line_total, 0), [lines]);
@@ -158,7 +185,8 @@ function Billing({ settings }) {
   const total = useMemo(() => +(subtotal + tax).toFixed(2), [subtotal, tax]);
 
   const createBill = async () => {
-    if (!tableNo || !partyNo || !waiterNo || !section) {
+    const h = header;
+    if (!h.table_no || !h.party_no || !h.waiter_no || !h.section) {
       toast.error("Enter table, party, waiter and section");
       return;
     }
@@ -168,25 +196,23 @@ function Billing({ settings }) {
     }
     try {
       const payload = {
-        header: { table_no: tableNo, party_no: partyNo, waiter_no: waiterNo, section },
+        header: { table_no: h.table_no, party_no: h.party_no, waiter_no: h.waiter_no, section: h.section, bill_number: h.bill_number || h.waiter_no },
         item_codes: lines.map(l => l.code),
         quantities: lines.map(l => l.quantity)
       };
       const res = await axios.post(`${API}/bill`, payload);
       toast.success("Bill created");
-      // Persist print data and settings
       window.printBillData = { ...res.data, settings };
-      window.__lastBill__ = res.data;
-      try { localStorage.setItem("lastBill", JSON.stringify(res.data)); } catch {}
-      try { localStorage.setItem("settings", JSON.stringify(settings || {})); } catch {}
+      try { localStorage.removeItem('billingDraft'); } catch {}
       setTimeout(() => window.print(), 200);
-      setLines([]);
+      // Clear draft after initiating print
+      setDraft({ header: { table_no: "", party_no: "1", waiter_no: "", section: "G", bill_number: "" }, lines: [] });
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Failed to create bill");
     }
   };
 
-  const effectiveRate = preview ? (section === 'AC' ? preview.price_ac : preview.price_general) : null;
+  const effectiveRate = preview ? (header.section === 'AC' ? preview.price_ac : preview.price_general) : null;
 
   return (
     <div className="space-y-4">
@@ -195,22 +221,26 @@ function Billing({ settings }) {
           <CardTitle className="flex items-center gap-2"><FileText size={18}/> Billing</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="grid grid-cols-5 gap-3">
+          <div className="grid grid-cols-6 gap-3">
             <div className="col-span-1">
               <Label>Table No</Label>
-              <Input value={tableNo} onChange={e => setTableNo(e.target.value)} />
+              <Input value={header.table_no || ''} onChange={e => onHeaderChange({ table_no: e.target.value })} />
             </div>
             <div className="col-span-1">
               <Label>Party No</Label>
-              <Input value={partyNo} onChange={e => setPartyNo(e.target.value)} />
+              <Input value={header.party_no || ''} onChange={e => onHeaderChange({ party_no: e.target.value })} />
             </div>
             <div className="col-span-1">
               <Label>Waiter No</Label>
-              <Input value={waiterNo} onChange={e => setWaiterNo(e.target.value)} />
+              <Input value={header.waiter_no || ''} onChange={e => onHeaderChange({ waiter_no: e.target.value, bill_number: (header.bill_number || header.waiter_no) === header.waiter_no ? e.target.value : header.bill_number })} />
             </div>
             <div className="col-span-1">
               <Label>Section (AC/G)</Label>
-              <Input value={section} onChange={e => setSection(e.target.value.toUpperCase().startsWith('A') ? 'AC' : 'G')} />
+              <Input value={header.section || ''} onChange={e => onHeaderChange({ section: e.target.value.toUpperCase().startsWith('A') ? 'AC' : 'G' })} />
+            </div>
+            <div className="col-span-2">
+              <Label>Bill No</Label>
+              <Input value={header.bill_number || ''} onChange={e => onHeaderChange({ bill_number: e.target.value })} />
             </div>
           </div>
 
@@ -227,7 +257,7 @@ function Billing({ settings }) {
             </div>
             <div className="col-span-2 flex gap-2">
               <Button onClick={addItem}>Add</Button>
-              <Button variant="secondary" onClick={() => { setLines([]); setPreview(null); }}>Clear</Button>
+              <Button variant="secondary" onClick={() => { setDraft({ ...draft, lines: [] }); setPreview(null); }}>Clear</Button>
             </div>
           </div>
 
@@ -253,6 +283,7 @@ function Billing({ settings }) {
                 <TableHead className="text-right">Qty</TableHead>
                 <TableHead className="text-right">Rate</TableHead>
                 <TableHead className="text-right">Amount</TableHead>
+                <TableHead className="text-right">Action</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -260,21 +291,28 @@ function Billing({ settings }) {
                 <TableRow key={idx}>
                   <TableCell>{l.code}</TableCell>
                   <TableCell>{l.name}</TableCell>
-                  <TableCell className="text-right">{l.quantity}</TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex items-center justify-end gap-2">
+                      <Button size="sm" variant="secondary" onClick={() => updateQty(idx, l.quantity - 1)}><Minus size={14}/></Button>
+                      <Input className="w-16 text-right" type="number" min={1} value={l.quantity} onChange={e => updateQty(idx, parseInt(e.target.value || '1', 10))} />
+                      <Button size="sm" onClick={() => updateQty(idx, l.quantity + 1)}><Plus size={14}/></Button>
+                    </div>
+                  </TableCell>
                   <TableCell className="text-right">₹ {l.unit_price}</TableCell>
                   <TableCell className="text-right">₹ {l.line_total.toFixed(2)}</TableCell>
+                  <TableCell className="text-right"><Button variant="destructive" size="sm" onClick={() => removeLine(idx)}>Remove</Button></TableCell>
                 </TableRow>
               ))}
               <TableRow>
-                <TableCell colSpan={4} className="text-right font-medium">Subtotal</TableCell>
+                <TableCell colSpan={5} className="text-right font-medium">Subtotal</TableCell>
                 <TableCell className="text-right">₹ {subtotal.toFixed(2)}</TableCell>
               </TableRow>
               <TableRow>
-                <TableCell colSpan={4} className="text-right font-medium">Tax 5%</TableCell>
+                <TableCell colSpan={5} className="text-right font-medium">Tax 5%</TableCell>
                 <TableCell className="text-right">₹ {tax.toFixed(2)}</TableCell>
               </TableRow>
               <TableRow>
-                <TableCell colSpan={4} className="text-right font-semibold">Grand Total</TableCell>
+                <TableCell colSpan={5} className="text-right font-semibold">Grand Total</TableCell>
                 <TableCell className="text-right font-semibold">₹ {total.toFixed(2)}</TableCell>
               </TableRow>
             </TableBody>
@@ -392,9 +430,7 @@ function CredentialsManager() {
   const [rows, setRows] = useState([]);
   const [form, setForm] = useState({ staff_code: "", role: "clerk", password: "", password_l1: "", password_root: "", active: true });
 
-  const load = async () => {
-    try { const res = await axios.get(`${API}/credentials`); setRows(res.data); } catch {}
-  };
+  const load = async () => { try { const res = await axios.get(`${API}/credentials`); setRows(res.data); } catch {} };
   useEffect(() => { load(); }, []);
 
   const add = async () => {
@@ -529,6 +565,9 @@ function App() {
   const { mode, setMode } = useAdminMode();
   const isAdmin = mode === "admin-limited" || mode === "admin-full";
   const [settings, setSettings] = useState(null);
+  const [billingDraft, setBillingDraft] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('billingDraft')) || { header: { table_no: "", party_no: "1", waiter_no: "", section: "G", bill_number: "" }, lines: [] }; } catch { return { header: { table_no: "", party_no: "1", waiter_no: "", section: "G", bill_number: "" }, lines: [] }; }
+  });
 
   const loadSettings = async () => {
     try {
@@ -538,9 +577,7 @@ function App() {
         window.__settings__ = res.data;
         try { localStorage.setItem('settings', JSON.stringify(res.data)); } catch {}
       }
-    } catch (e) {
-      // ignore for MVP
-    }
+    } catch (e) { /* ignore */ }
   };
 
   useEffect(() => { loadSettings(); }, []);
@@ -554,7 +591,6 @@ function App() {
           <p className="text-sm text-neutral-600">Charminar, Hyderabad</p>
         </div>
 
-        {/* Gate: show only login until authenticated */}
         {mode === 'none' ? (
           <div className="max-w-3xl"><LoginPanel onMode={setMode} /></div>
         ) : (
@@ -568,7 +604,7 @@ function App() {
                 )}
               </TabsList>
               <TabsContent value="billing" className="mt-4">
-                <Billing settings={settings} />
+                <Billing settings={settings} draft={billingDraft} setDraft={setBillingDraft} />
               </TabsContent>
               <TabsContent value="menu" className="mt-4">
                 <FoodMenu />

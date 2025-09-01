@@ -62,7 +62,7 @@ class BillHeader(BaseModel):
     party_no: str
     waiter_no: str
     section: Literal['AC', 'G']
-    bill_number: Optional[str] = None  # populated by server
+    bill_number: Optional[str] = None  # populated by server if not provided
 
 class Bill(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -215,7 +215,7 @@ async def staff_login(payload: StaffLoginRequest):
         raise HTTPException(status_code=401, detail='Invalid admin password')
     else:
         # clerk
-        if cred.password:
+        if cred.password is not None:
             if payload.password != cred.password:
                 raise HTTPException(status_code=401, detail='Invalid clerk password')
         return StaffLoginResponse(mode='clerk')
@@ -297,6 +297,7 @@ class BillCreateRequest(BaseModel):
         party_no: str
         waiter_no: str
         section: Literal['AC', 'G']
+        bill_number: Optional[str] = None
     header: Header
     item_codes: List[str]
     quantities: List[int]
@@ -325,8 +326,8 @@ async def create_bill(payload: BillCreateRequest):
     tax_amount = round(subtotal * tax_percent / 100.0, 2)
     grand_total = round(subtotal + tax_amount, 2)
 
-    # Bill number policy: same as waiter number (set by system)
-    bill_no = payload.header.waiter_no
+    # Bill number policy: default to waiter_no but allow provided bill_number
+    bill_no = payload.header.bill_number or payload.header.waiter_no
 
     settings = await get_settings_doc()
 
