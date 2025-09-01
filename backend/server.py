@@ -326,8 +326,8 @@ async def create_bill(payload: BillCreateRequest):
     tax_amount = round(subtotal * tax_percent / 100.0, 2)
     grand_total = round(subtotal + tax_amount, 2)
 
-    # Bill number policy: default to waiter_no but allow provided bill_number
-    bill_no = payload.header.bill_number or payload.header.waiter_no
+    # Bill number policy: set by system as waiter_no (ignore any provided bill_number)
+    bill_no = payload.header.waiter_no
 
     settings = await get_settings_doc()
 
