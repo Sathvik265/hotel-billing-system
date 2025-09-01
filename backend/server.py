@@ -73,7 +73,7 @@ class Bill(BaseModel):
     tax_amount: float
     grand_total: float
     created_at: str
-    hotel_name: str = HOTEL_NAME
+    hotel_name: str
 
 class StaffLoginRequest(BaseModel):
     staff_code: str  # e.g., SHI
@@ -81,6 +81,19 @@ class StaffLoginRequest(BaseModel):
 
 class StaffLoginResponse(BaseModel):
     mode: Literal['clerk', 'admin-limited', 'admin-full']
+
+class Settings(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    hotel_name: str = HOTEL_NAME
+    gstin: Optional[str] = ""
+    phone: Optional[str] = ""
+    address: Optional[str] = ""
+
+class SettingsUpdate(BaseModel):
+    hotel_name: Optional[str] = None
+    gstin: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
 
 # Helpers
 async def seed_menu_if_empty():
@@ -108,6 +121,31 @@ async def get_menu_by_code(code: str) -> Optional[MenuItem]:
         return None
     return MenuItem(**item)
 
+async def get_settings_doc() -> Settings:
+    doc = await db.settings.find_one({})
+    if not doc:
+        default = Settings()
+        await db.settings.insert_one(default.model_dump())
+        return default
+    return Settings(**doc)
+
+async def save_settings(update: SettingsUpdate) -> Settings:
+    # Build update dict excluding None
+    upd = {k: v for k, v in update.model_dump().items() if v is not None}
+    doc = await db.settings.find_one_and_update(
+        {},
+        {"$set": upd},
+        upsert=True,
+        return_document=ReturnDocument.AFTER,
+    )
+    if not doc:
+        # created new
+        new_doc = Settings(**{**Settings().model_dump(), **upd})
+        await db.settings.insert_one(new_doc.model_dump())
+        return new_doc
+    return Settings(**doc)
+
+
 def now_local_iso() -> str:
     return datetime.now(TZ).isoformat()
 
@@ -127,6 +165,8 @@ async def next_bill_number() -> str:
 @app.on_event('startup')
 async def on_startup():
     await seed_menu_if_empty()
+    # ensure settings exists
+    await get_settings_doc()
 
 # Routes
 @api.get('/')
@@ -149,6 +189,16 @@ async def staff_login(payload: StaffLoginRequest):
         raise HTTPException(status_code=401, detail='Invalid admin password')
     # Non-admin codes become clerks silently
     return StaffLoginResponse(mode='clerk')
+
+# Settings endpoints
+@api.get('/settings', response_model=Settings)
+async def get_settings():
+    return await get_settings_doc()
+
+@api.put('/settings', response_model=Settings)
+async def update_settings(payload: SettingsUpdate):
+    # NOTE: In MVP, no backend auth enforcement; frontend limits to admin-full
+    return await save_settings(payload)
 
 @api.get('/menu', response_model=List[MenuItem])
 async def list_menu():
@@ -212,6 +262,8 @@ async def create_bill(payload: BillCreateRequest):
     # Bill number handling: auto if not provided
     bill_no = payload.header.bill_number or await next_bill_number()
 
+    settings = await get_settings_doc()
+
     bill = Bill(
         header=BillHeader(
             table_no=payload.header.table_no,
@@ -226,6 +278,7 @@ async def create_bill(payload: BillCreateRequest):
         tax_amount=tax_amount,
         grand_total=grand_total,
         created_at=now_local_iso(),
+        hotel_name=settings.hotel_name or HOTEL_NAME,
     )
 
     await db.bills.insert_one(bill.model_dump())

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import "./App.css";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "./components/ui/tabs";
@@ -10,7 +10,8 @@ import { Toaster } from "./components/ui/sonner";
 import { toast } from "sonner";
 import { Separator } from "./components/ui/separator";
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "./components/ui/table";
-import { Printer, LockKeyhole, ChefHat, ListOrdered, FileText } from "lucide-react";
+import { Textarea } from "./components/ui/textarea";
+import { Printer, LockKeyhole, ChefHat, ListOrdered, FileText, Save } from "lucide-react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL; // do not hardcode
 const API = `${BACKEND_URL}/api`;
@@ -23,6 +24,7 @@ function useAdminMode() {
 function LoginPanel({ onMode }) {
   const [staffCode, setStaffCode] = useState("");
   const [password, setPassword] = useState("");
+  const isAdminCode = (staffCode || "").trim().toUpperCase() === "SHI";
 
   const submit = async () => {
     try {
@@ -48,10 +50,12 @@ function LoginPanel({ onMode }) {
           <Label className="text-sm">3-letter ID</Label>
           <Input placeholder="e.g., SHI" className="col-span-2" value={staffCode} onChange={e => setStaffCode(e.target.value)} />
         </div>
-        <div className="grid grid-cols-3 items-center gap-3">
-          <Label className="text-sm">Password (admin)</Label>
-          <Input type="password" placeholder="leave blank for clerk" className="col-span-2" value={password} onChange={e => setPassword(e.target.value)} />
-        </div>
+        {isAdminCode && (
+          <div className="grid grid-cols-3 items-center gap-3">
+            <Label className="text-sm">Password (admin)</Label>
+            <Input type="password" placeholder="admin password" className="col-span-2" value={password} onChange={e => setPassword(e.target.value)} />
+          </div>
+        )}
         <div className="flex justify-end">
           <Button onClick={submit} className="px-5">Enter</Button>
         </div>
@@ -107,7 +111,7 @@ function FoodMenu() {
   );
 }
 
-function Billing() {
+function Billing({ settings }) {
   const [tableNo, setTableNo] = useState("");
   const [partyNo, setPartyNo] = useState("");
   const [waiterNo, setWaiterNo] = useState("");
@@ -117,6 +121,23 @@ function Billing() {
   const [entryCode, setEntryCode] = useState("");
   const [qty, setQty] = useState(1);
   const [lines, setLines] = useState([]);
+
+  const [preview, setPreview] = useState(null);
+  const debounceRef = useRef();
+
+  useEffect(() => {
+    if (!entryCode || entryCode.trim().length < 2) { setPreview(null); return; }
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(async () => {
+      try {
+        const res = await axios.get(`${API}/menu/lookup/${entryCode}`);
+        setPreview(res.data);
+      } catch {
+        setPreview(null);
+      }
+    }, 250);
+    return () => debounceRef.current && clearTimeout(debounceRef.current);
+  }, [entryCode]);
 
   const addItem = async () => {
     if (!entryCode) return;
@@ -128,6 +149,7 @@ function Billing() {
       setLines(prev => [...prev, newLine]);
       setEntryCode("");
       setQty(1);
+      setPreview(null);
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Item not found");
     }
@@ -154,18 +176,19 @@ function Billing() {
       };
       const res = await axios.post(`${API}/bill`, payload);
       toast.success("Bill created");
-      // Persist print data for reliability across print dialogs
-      window.printBillData = res.data; // attach to window for print template
+      // Persist print data and settings
+      window.printBillData = { ...res.data, settings };
       window.__lastBill__ = res.data;
       try { localStorage.setItem("lastBill", JSON.stringify(res.data)); } catch {}
-      // Open print preview after small delay to ensure DOM render
+      try { localStorage.setItem("settings", JSON.stringify(settings || {})); } catch {}
       setTimeout(() => window.print(), 200);
-      // reset form but keep print data available
       setLines([]); setBillNumber("");
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Failed to create bill");
     }
   };
+
+  const effectiveRate = preview ? (section === 'AC' ? preview.price_ac : preview.price_general) : null;
 
   return (
     <div className="space-y-4">
@@ -210,9 +233,23 @@ function Billing() {
             </div>
             <div className="col-span-2 flex gap-2">
               <Button onClick={addItem}>Add</Button>
-              <Button variant="secondary" onClick={() => setLines([])}>Clear</Button>
+              <Button variant="secondary" onClick={() => { setLines([]); setPreview(null); }}>Clear</Button>
             </div>
           </div>
+
+          {preview && (
+            <div className="rounded-md border bg-amber-50 px-4 py-2 text-sm">
+              <div className="flex justify-between">
+                <div className="font-medium">{preview.name} ({preview.alpha_code}/{preview.numeric_code})</div>
+                <div>Rate now: ₹ {effectiveRate}</div>
+              </div>
+              <div className="mt-1 grid grid-cols-3 gap-2">
+                <div>Fixed: ₹ {preview.price_fixed}</div>
+                <div>General: ₹ {preview.price_general}</div>
+                <div>AC: ₹ {preview.price_ac}</div>
+              </div>
+            </div>
+          )}
 
           <Table className="mt-3">
             <TableHeader>
@@ -239,7 +276,7 @@ function Billing() {
                 <TableCell className="text-right">₹ {subtotal.toFixed(2)}</TableCell>
               </TableRow>
               <TableRow>
-                <TableCell colSpan={4} className="text-right font-medium">Tax 5%</TableCell>
+                <TableCell colSpan={4} className="text-right font-medium">Tax 5%</TableRow>
                 <TableCell className="text-right">₹ {tax.toFixed(2)}</TableCell>
               </TableRow>
               <TableRow>
@@ -257,29 +294,28 @@ function Billing() {
 
       {/* Print styles */}
       <div className="print-area hidden print:block">
-        <BillPrint />
+        <BillPrint settings={settings} />
       </div>
     </div>
   );
 }
 
-function BillPrint() {
-  const data = window.printBillData;
+function BillPrint({ settings }) {
+  const data = (typeof window !== 'undefined' && window.printBillData) || null;
+  const cfg = settings || (typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('settings') || '{}') : {});
   if (!data) return null;
   return (
-    <div className="p-6 text-black text-sm w-[580px]">
-      <div className="text-center font-bold text-lg">{data.hotel_name}</div>
-      <div className="text-center">GST Included</div>
-      <Separator className="my-2" />
-      <div className="flex justify-between text-xs">
-        <div>Bill No: {data.header.bill_number}</div>
-        <div>Date: {new Date(data.created_at).toLocaleString()}</div>
-      </div>
-      <div className="flex justify-between text-xs">
-        <div>Table: {data.header.table_no}</div>
-        <div>Waiter: {data.header.waiter_no}</div>
-      </div>
-      <Separator className="my-2" />
+    <div className="print-receipt">
+      <div className="text-center font-bold text-base">{data.hotel_name}</div>
+      {cfg?.address ? <div className="text-center text-xs">{cfg.address}</div> : null}
+      <div className="text-center text-xs">GST Included{cfg?.gstin ? ` • GSTIN: ${cfg.gstin}` : ''}{cfg?.phone ? ` • Ph: ${cfg.phone}` : ''}</div>
+      <div className="divider" />
+      <div className="row"><span>Bill No</span><span>{data.header.bill_number}</span></div>
+      <div className="row"><span>Date</span><span>{new Date(data.created_at).toLocaleString()}</span></div>
+      <div className="row"><span>Table</span><span>{data.header.table_no}</span></div>
+      <div className="row"><span>Waiter</span><span>{data.header.waiter_no}</span></div>
+      <div className="row"><span>Section</span><span>{data.header.section}</span></div>
+      <div className="divider" />
       <table className="w-full text-xs">
         <thead>
           <tr>
@@ -300,37 +336,106 @@ function BillPrint() {
           ))}
         </tbody>
       </table>
-      <Separator className="my-2" />
-      <div className="flex justify-between"><div>Subtotal</div><div>₹ {data.subtotal.toFixed(2)}</div></div>
-      <div className="flex justify-between"><div>Tax (5%)</div><div>₹ {data.tax_amount.toFixed(2)}</div></div>
-      <div className="flex justify-between font-semibold"><div>Total</div><div>₹ {data.grand_total.toFixed(2)}</div></div>
-      <div className="text-center mt-3">Thank you! Visit again</div>
+      <div className="divider" />
+      <div className="row"><span>Subtotal</span><span>₹ {data.subtotal.toFixed(2)}</span></div>
+      <div className="row"><span>Tax (5%)</span><span>₹ {data.tax_amount.toFixed(2)}</span></div>
+      <div className="row total"><span>Total</span><span>₹ {data.grand_total.toFixed(2)}</span></div>
+      <div className="center mt-2 text-xs">Thank you! Visit again</div>
     </div>
   );
 }
 
-function AdminPanel({ mode }) {
+function SettingsEditor({ settings, onChange, canEdit }) {
+  const [form, setForm] = useState(settings || {});
+  useEffect(() => setForm(settings || {}), [settings]);
+
+  const save = async () => {
+    try {
+      const res = await axios.put(`${API}/settings`, form);
+      onChange && onChange(res.data);
+      toast.success("Settings saved");
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Failed to save settings");
+    }
+  };
+
+  if (!canEdit) return null;
+  return (
+    <Card className="bg-white/80 backdrop-blur">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2"><Save size={16}/> Receipt Settings (Admin Full)</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label>Hotel Name</Label>
+            <Input value={form.hotel_name || ''} onChange={e => setForm({ ...form, hotel_name: e.target.value })} />
+          </div>
+          <div>
+            <Label>Phone</Label>
+            <Input value={form.phone || ''} onChange={e => setForm({ ...form, phone: e.target.value })} />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label>GSTIN</Label>
+            <Input value={form.gstin || ''} onChange={e => setForm({ ...form, gstin: e.target.value })} />
+          </div>
+          <div>
+            <Label>Address</Label>
+            <Textarea rows={2} value={form.address || ''} onChange={e => setForm({ ...form, address: e.target.value })} />
+          </div>
+        </div>
+        <div className="flex justify-end">
+          <Button onClick={save} className="gap-2"><Save size={14}/> Save</Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function AdminPanel({ mode, settings, onSettings }) {
   const isAdmin = mode === "admin-limited" || mode === "admin-full";
   if (!isAdmin) return null;
   const entries = ["pending", "update", "rectify", "reindex", "create", "report"];
   return (
-    <Card className="bg-white/80 backdrop-blur">
-      <CardHeader>
-        <CardTitle>Admin Actions ({mode})</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <p className="text-sm text-neutral-600 mb-2">Select an action to proceed. Functionality will be added next.</p>
-        <ul className="list-disc ml-5">
-          {entries.map(e => <li key={e}>{e}</li>)}
-        </ul>
-      </CardContent>
-    </Card>
+    <div className="space-y-4">
+      <Card className="bg-white/80 backdrop-blur">
+        <CardHeader>
+          <CardTitle>Admin Actions ({mode})</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ul className="list-disc ml-5">
+            {entries.map(e => <li key={e}>{e}</li>)}
+          </ul>
+        </CardContent>
+      </Card>
+      {mode === 'admin-full' && (
+        <SettingsEditor settings={settings} onChange={onSettings} canEdit={true} />
+      )}
+    </div>
   );
 }
 
 function App() {
   const { mode, setMode } = useAdminMode();
   const isAdmin = mode === "admin-limited" || mode === "admin-full";
+  const [settings, setSettings] = useState(null);
+
+  const loadSettings = async () => {
+    try {
+      const res = await axios.get(`${API}/settings`);
+      setSettings(res.data);
+      if (typeof window !== 'undefined') {
+        window.__settings__ = res.data;
+        try { localStorage.setItem('settings', JSON.stringify(res.data)); } catch {}
+      }
+    } catch (e) {
+      // ignore for MVP
+    }
+  };
+
+  useEffect(() => { loadSettings(); }, []);
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-amber-50 to-orange-50 text-neutral-800">
@@ -354,14 +459,14 @@ function App() {
             )}
           </TabsList>
           <TabsContent value="billing" className="mt-4">
-            <Billing />
+            <Billing settings={settings} />
           </TabsContent>
           <TabsContent value="menu" className="mt-4">
             <FoodMenu />
           </TabsContent>
           {isAdmin && (
             <TabsContent value="admin" className="mt-4">
-              <AdminPanel mode={mode} />
+              <AdminPanel mode={mode} settings={settings} onSettings={(s) => { setSettings(s); if (typeof window !== 'undefined') window.__settings__ = s; }} />
             </TabsContent>
           )}
         </Tabs>

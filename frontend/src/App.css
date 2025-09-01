@@ -19,15 +19,23 @@ body {
 
 .print-area { display: none; }
 @media print {
-  body { background: white; }
+  body { background: white; margin: 0; }
   .print-area { display: block; }
   .no-print { display: none !important; }
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
 
-button {
-  transition: background-color 150ms ease, color 150ms ease;
+/* 80mm thermal receipt styles */
+.print-receipt {
+  width: 80mm;
+  padding: 6mm 5mm;
+  color: #000;
+  font-size: 11px;
 }
+.print-receipt .divider { border-top: 1px dashed #333; margin: 6px 0; }
+.print-receipt .row { display: flex; justify-content: space-between; margin: 2px 0; }
+.print-receipt .row.total { font-weight: 700; }
+.print-receipt .center { text-align: center; }
 
-input {
-  transition: box-shadow 150ms ease, border-color 150ms ease;
-}
+button { transition: background-color 150ms ease, color 150ms ease; }
+input { transition: box-shadow 150ms ease, border-color 150ms ease; }
