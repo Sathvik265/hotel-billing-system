@@ -307,7 +307,8 @@ function BillPrint() {
 }
 
 function AdminPanel({ mode }) {
-  if (!mode.startsWith("admin")) return null;
+  const isAdmin = mode === "admin-limited" || mode === "admin-full";
+  if (!isAdmin) return null;
   const entries = ["pending", "update", "rectify", "reindex", "create", "report"];
   return (
     <Card className="bg-white/80 backdrop-blur">
@@ -315,6 +316,7 @@ function AdminPanel({ mode }) {
         <CardTitle>Admin Actions ({mode})</CardTitle>
       </CardHeader>
       <CardContent>
+        <p className="text-sm text-neutral-600 mb-2">Select an action to proceed. Functionality will be added next.</p>
         <ul className="list-disc ml-5">
           {entries.map(e => <li key={e}>{e}</li>)}
         </ul>
@@ -325,6 +327,7 @@ function AdminPanel({ mode }) {
 
 function App() {
   const { mode, setMode } = useAdminMode();
+  const isAdmin = mode === "admin-limited" || mode === "admin-full";
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-amber-50 to-orange-50 text-neutral-800">
@@ -343,7 +346,7 @@ function App() {
           <TabsList className="bg-white/70 backdrop-blur border">
             <TabsTrigger value="billing" className="gap-1"><FileText size={14}/> Billing</TabsTrigger>
             <TabsTrigger value="menu" className="gap-1"><ListOrdered size={14}/> Food Menu</TabsTrigger>
-            {mode.startsWith("admin") && (
+            {isAdmin && (
               <TabsTrigger value="admin" className="gap-1"><LockKeyhole size={14}/> Admin</TabsTrigger>
             )}
           </TabsList>
@@ -353,7 +356,7 @@ function App() {
           <TabsContent value="menu" className="mt-4">
             <FoodMenu />
           </TabsContent>
-          {mode.startsWith("admin") && (
+          {isAdmin && (
             <TabsContent value="admin" className="mt-4">
               <AdminPanel mode={mode} />
             </TabsContent>
