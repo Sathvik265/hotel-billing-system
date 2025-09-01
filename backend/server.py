@@ -5,10 +5,11 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
 from pathlib import Path
-from datetime import datetime, timezone
-import pytz
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import os
 import uuid
+from pymongo import ReturnDocument
 
 # Load env
 ROOT_DIR = Path(__file__).parent
@@ -28,7 +29,7 @@ api = APIRouter(prefix="/api")
 
 # Constants
 HOTEL_NAME = "Udupi Anand Bhavan, Charminar, Hyderabad"
-TZ = pytz.timezone(os.environ.get('APP_TIMEZONE', 'Asia/Kolkata'))
+TZ = ZoneInfo(os.environ.get('APP_TIMEZONE', 'Asia/Kolkata'))
 
 # Models
 class MenuItem(BaseModel):
@@ -50,7 +51,7 @@ class MenuItemCreate(BaseModel):
     price_ac: float
 
 class BillItem(BaseModel):
-    code: str # can be alpha or numeric
+    code: str  # can be alpha or numeric
     name: str
     quantity: int
     unit_price: float
@@ -84,7 +85,7 @@ class StaffLoginResponse(BaseModel):
 # Helpers
 async def seed_menu_if_empty():
     count = await db.menu.count_documents({})
-    if count &gt; 0:
+    if count > 0:
         return
     seed: List[MenuItem] = [
         MenuItem(name='Idli', alpha_code='IDL', numeric_code='101', price_fixed=30, price_general=35, price_ac=40),
@@ -100,24 +101,24 @@ async def seed_menu_if_empty():
     ]
     await db.menu.insert_many([s.model_dump() for s in seed])
 
-async def get_menu_by_code(code: str) -&gt; Optional[MenuItem]:
+async def get_menu_by_code(code: str) -> Optional[MenuItem]:
     code_upper = code.strip().upper()
     item = await db.menu.find_one({"$or": [{"alpha_code": code_upper}, {"numeric_code": code_upper}]})
     if not item:
         return None
     return MenuItem(**item)
 
-def now_local_iso() -&gt; str:
+def now_local_iso() -> str:
     return datetime.now(TZ).isoformat()
 
-async def next_bill_number() -&gt; str:
+async def next_bill_number() -> str:
     # daily counter collection: bill_counters with date_key and seq
     today = datetime.now(TZ).strftime('%Y%m%d')
     doc = await db.bill_counters.find_one_and_update(
         {"date_key": today},
         {"$inc": {"seq": 1}},
         upsert=True,
-        return_document=True
+        return_document=ReturnDocument.AFTER
     )
     seq = doc.get('seq', 1)
     return f"{today}-{seq:03d}"

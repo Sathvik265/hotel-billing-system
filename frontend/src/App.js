@@ -343,7 +343,7 @@ function App() {
           <TabsList className="bg-white/70 backdrop-blur border">
             <TabsTrigger value="billing" className="gap-1"><FileText size={14}/> Billing</TabsTrigger>
             <TabsTrigger value="menu" className="gap-1"><ListOrdered size={14}/> Food Menu</TabsTrigger>
-            {mode.startsWith("admin") &amp;&amp; (
+            {mode.startsWith("admin") && (
               <TabsTrigger value="admin" className="gap-1"><LockKeyhole size={14}/> Admin</TabsTrigger>
             )}
           </TabsList>
@@ -353,7 +353,7 @@ function App() {
           <TabsContent value="menu" className="mt-4">
             <FoodMenu />
           </TabsContent>
-          {mode.startsWith("admin") &amp;&amp; (
+          {mode.startsWith("admin") && (
             <TabsContent value="admin" className="mt-4">
               <AdminPanel mode={mode} />
             </TabsContent>
