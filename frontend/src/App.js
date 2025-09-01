@@ -276,7 +276,7 @@ function Billing({ settings }) {
                 <TableCell className="text-right">₹ {subtotal.toFixed(2)}</TableCell>
               </TableRow>
               <TableRow>
-                <TableCell colSpan={4} className="text-right font-medium">Tax 5%</TableRow>
+                <TableCell colSpan={4} className="text-right font-medium">Tax 5%</TableCell>
                 <TableCell className="text-right">₹ {tax.toFixed(2)}</TableCell>
               </TableRow>
               <TableRow>
