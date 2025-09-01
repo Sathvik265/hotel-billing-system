@@ -232,15 +232,15 @@ function Billing({ settings, draft, setDraft }) {
             </div>
             <div className="col-span-1">
               <Label>Waiter No</Label>
-              <Input value={header.waiter_no || ''} onChange={e => onHeaderChange({ waiter_no: e.target.value, bill_number: (header.bill_number || header.waiter_no) === header.waiter_no ? e.target.value : header.bill_number })} />
+              <Input value={header.waiter_no || ''} onChange={e => onHeaderChange({ waiter_no: e.target.value, bill_number: e.target.value })} />
             </div>
             <div className="col-span-1">
               <Label>Section (AC/G)</Label>
               <Input value={header.section || ''} onChange={e => onHeaderChange({ section: e.target.value.toUpperCase().startsWith('A') ? 'AC' : 'G' })} />
             </div>
             <div className="col-span-2">
-              <Label>Bill No</Label>
-              <Input value={header.bill_number || ''} onChange={e => onHeaderChange({ bill_number: e.target.value })} />
+              <Label>Bill No (system)</Label>
+              <Input value={header.waiter_no || ''} readOnly />
             </div>
           </div>
 
