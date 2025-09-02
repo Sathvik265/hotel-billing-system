@@ -9,10 +9,33 @@ import { Label } from "./components/ui/label";
 import { Toaster } from "./components/ui/sonner";
 import { toast } from "sonner";
 import { Separator } from "./components/ui/separator";
-import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "./components/ui/table";
+import {
+  Table,
+  TableHeader,
+  TableRow,
+  TableHead,
+  TableBody,
+  TableCell,
+} from "./components/ui/table";
 import { Textarea } from "./components/ui/textarea";
-import { Printer, LockKeyhole, ChefHat, ListOrdered, FileText, Save, Trash2, Minus, Plus } from "lucide-react";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
+import {
+  Printer,
+  LockKeyhole,
+  ChefHat,
+  ListOrdered,
+  FileText,
+  Save,
+  Trash2,
+  Minus,
+  Plus,
+} from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "./components/ui/select";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL; // do not hardcode
 const API = `${BACKEND_URL}/api`;
@@ -23,15 +46,30 @@ function useAdminMode() {
 }
 
 function LoginPanel({ onMode }) {
-  const [staffCode, setStaffCode] = useState("");
-  const [password, setPassword] = useState("");
+  const [credential, setCredential] = useState("");
 
-  const submit = async () => {
+  const handleKeyDown = (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      if (event.shiftKey) {
+        // Shift + Enter pressed
+        submit(true);
+      } else {
+        // Enter pressed
+        submit(false);
+      }
+    }
+  };
+
+  const submit = async (isRoot = false) => {
     try {
-      const res = await axios.post(`${API}/auth/login`, { staff_code: staffCode, password });
+      const res = await axios.post(`${API}/auth/login`, {
+        staff_code: credential,
+        is_root: isRoot,
+      });
       onMode(res.data.mode);
       if (res.data.mode.includes("admin")) {
-        toast.success("Admin mode unlocked");
+        toast.success(`Logged in as ${res.data.mode}`);
       } else {
         toast.success("Clerk mode");
       }
@@ -44,19 +82,31 @@ function LoginPanel({ onMode }) {
   return (
     <Card className="shadow-xl border-0 bg-white/70 backdrop-blur-xl">
       <CardHeader>
-        <CardTitle className="text-xl flex items-center gap-2"><LockKeyhole size={18} /> Staff Access</CardTitle>
+        <CardTitle className="text-xl flex items-center gap-2">
+          <LockKeyhole size={18} /> Staff Access
+        </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="grid grid-cols-3 items-center gap-3">
-          <Label className="text-sm">3-letter ID</Label>
-          <Input placeholder="e.g., SHI or CLK" className="col-span-2" value={staffCode} onChange={e => setStaffCode(e.target.value)} />
-        </div>
-        <div className="grid grid-cols-3 items-center gap-3">
-          <Label className="text-sm">Password</Label>
-          <Input type="password" placeholder="required for admin" className="col-span-2" value={password} onChange={e => setPassword(e.target.value)} />
+          <Label className="text-sm">Credential</Label>
+          <Input
+            placeholder="Enter credential"
+            className="col-span-2"
+            value={credential}
+            onChange={(e) => setCredential(e.target.value)}
+            onKeyDown={handleKeyDown}
+          />
         </div>
         <div className="flex justify-end">
-          <Button onClick={submit} className="px-5">Enter</Button>
+          <Button onClick={() => submit(false)} className="px-5">
+            Enter
+          </Button>
+        </div>
+        <div className="text-xs text-gray-500">
+          <p>
+            Hint: Type 'clk' for clerk mode, 'shi' for admin mode, or 'shi' +
+            Shift+Enter for root admin mode.
+          </p>
         </div>
       </CardContent>
     </Card>
@@ -73,12 +123,16 @@ function FoodMenu() {
       toast.error("Failed to load menu");
     }
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+  }, []);
 
   return (
     <Card className="shadow-md bg-white/80 backdrop-blur">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2"><ChefHat size={18}/> Food Menu</CardTitle>
+        <CardTitle className="flex items-center gap-2">
+          <ChefHat size={18} /> Food Menu
+        </CardTitle>
       </CardHeader>
       <CardContent>
         <Table>
@@ -130,17 +184,27 @@ function Billing({ settings, draft, setDraft }) {
       }
     }
     setDraft({ ...draft, header: h });
-    try { localStorage.setItem('billingDraft', JSON.stringify({ ...draft, header: h })); } catch {}
+    try {
+      localStorage.setItem(
+        "billingDraft",
+        JSON.stringify({ ...draft, header: h })
+      );
+    } catch {}
   };
 
   useEffect(() => {
-    if (!entryCode || entryCode.trim().length < 2) { setPreview(null); return; }
+    if (!entryCode || entryCode.trim().length < 2) {
+      setPreview(null);
+      return;
+    }
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(async () => {
       try {
         const res = await axios.get(`${API}/menu/lookup/${entryCode}`);
         setPreview(res.data);
-      } catch { setPreview(null); }
+      } catch {
+        setPreview(null);
+      }
     }, 250);
     return () => debounceRef.current && clearTimeout(debounceRef.current);
   }, [entryCode]);
@@ -150,12 +214,22 @@ function Billing({ settings, draft, setDraft }) {
     try {
       const res = await axios.get(`${API}/menu/lookup/${entryCode}`);
       const item = res.data;
-      const unit = header.section === 'AC' ? item.price_ac : item.price_general;
-      const newLine = { code: entryCode.toUpperCase(), name: item.name, quantity: qty, unit_price: unit, line_total: +(unit * qty).toFixed(2) };
+      const unit = header.section === "AC" ? item.price_ac : item.price_general;
+      const newLine = {
+        code: entryCode.toUpperCase(),
+        name: item.name,
+        quantity: qty,
+        unit_price: unit,
+        line_total: +(unit * qty).toFixed(2),
+      };
       const updated = { ...draft, lines: [...lines, newLine] };
       setDraft(updated);
-      try { localStorage.setItem('billingDraft', JSON.stringify(updated)); } catch {}
-      setEntryCode(""); setQty(1); setPreview(null);
+      try {
+        localStorage.setItem("billingDraft", JSON.stringify(updated));
+      } catch {}
+      setEntryCode("");
+      setQty(1);
+      setPreview(null);
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Item not found");
     }
@@ -166,21 +240,32 @@ function Billing({ settings, draft, setDraft }) {
     const updatedLines = lines.map((l, i) => {
       if (i !== index) return l;
       const unit = l.unit_price;
-      return { ...l, quantity: newQty, line_total: +(unit * newQty).toFixed(2) };
+      return {
+        ...l,
+        quantity: newQty,
+        line_total: +(unit * newQty).toFixed(2),
+      };
     });
     const updated = { ...draft, lines: updatedLines };
     setDraft(updated);
-    try { localStorage.setItem('billingDraft', JSON.stringify(updated)); } catch {}
+    try {
+      localStorage.setItem("billingDraft", JSON.stringify(updated));
+    } catch {}
   };
 
   const removeLine = (index) => {
     const updatedLines = lines.filter((_, i) => i !== index);
     const updated = { ...draft, lines: updatedLines };
     setDraft(updated);
-    try { localStorage.setItem('billingDraft', JSON.stringify(updated)); } catch {}
+    try {
+      localStorage.setItem("billingDraft", JSON.stringify(updated));
+    } catch {}
   };
 
-  const subtotal = useMemo(() => lines.reduce((s, l) => s + l.line_total, 0), [lines]);
+  const subtotal = useMemo(
+    () => lines.reduce((s, l) => s + l.line_total, 0),
+    [lines]
+  );
   const tax = useMemo(() => +(subtotal * 0.05).toFixed(2), [subtotal]);
   const total = useMemo(() => +(subtotal + tax).toFixed(2), [subtotal, tax]);
 
@@ -196,51 +281,97 @@ function Billing({ settings, draft, setDraft }) {
     }
     try {
       const payload = {
-        header: { table_no: h.table_no, party_no: h.party_no, waiter_no: h.waiter_no, section: h.section, bill_number: h.bill_number || h.waiter_no },
-        item_codes: lines.map(l => l.code),
-        quantities: lines.map(l => l.quantity)
+        header: {
+          table_no: h.table_no,
+          party_no: h.party_no,
+          waiter_no: h.waiter_no,
+          section: h.section,
+          bill_number: h.bill_number || h.waiter_no,
+        },
+        item_codes: lines.map((l) => l.code),
+        quantities: lines.map((l) => l.quantity),
       };
       const res = await axios.post(`${API}/bill`, payload);
       toast.success("Bill created");
       window.printBillData = { ...res.data, settings };
-      try { localStorage.removeItem('billingDraft'); } catch {}
+      try {
+        localStorage.removeItem("billingDraft");
+      } catch {}
       setTimeout(() => window.print(), 200);
       // Clear draft after initiating print
-      setDraft({ header: { table_no: "", party_no: "1", waiter_no: "", section: "G", bill_number: "" }, lines: [] });
+      setDraft({
+        header: {
+          table_no: "",
+          party_no: "1",
+          waiter_no: "",
+          section: "G",
+          bill_number: "",
+        },
+        lines: [],
+      });
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Failed to create bill");
     }
   };
 
-  const effectiveRate = preview ? (header.section === 'AC' ? preview.price_ac : preview.price_general) : null;
+  const effectiveRate = preview
+    ? header.section === "AC"
+      ? preview.price_ac
+      : preview.price_general
+    : null;
 
   return (
     <div className="space-y-4">
       <Card className="bg-white/80 backdrop-blur">
         <CardHeader>
-          <CardTitle className="flex items-center gap-2"><FileText size={18}/> Billing</CardTitle>
+          <CardTitle className="flex items-center gap-2">
+            <FileText size={18} /> Billing
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid grid-cols-6 gap-3">
             <div className="col-span-1">
               <Label>Table No</Label>
-              <Input value={header.table_no || ''} onChange={e => onHeaderChange({ table_no: e.target.value })} />
+              <Input
+                value={header.table_no || ""}
+                onChange={(e) => onHeaderChange({ table_no: e.target.value })}
+              />
             </div>
             <div className="col-span-1">
               <Label>Party No</Label>
-              <Input value={header.party_no || ''} onChange={e => onHeaderChange({ party_no: e.target.value })} />
+              <Input
+                value={header.party_no || ""}
+                onChange={(e) => onHeaderChange({ party_no: e.target.value })}
+              />
             </div>
             <div className="col-span-1">
               <Label>Waiter No</Label>
-              <Input value={header.waiter_no || ''} onChange={e => onHeaderChange({ waiter_no: e.target.value, bill_number: e.target.value })} />
+              <Input
+                value={header.waiter_no || ""}
+                onChange={(e) =>
+                  onHeaderChange({
+                    waiter_no: e.target.value,
+                    bill_number: e.target.value,
+                  })
+                }
+              />
             </div>
             <div className="col-span-1">
               <Label>Section (AC/G)</Label>
-              <Input value={header.section || ''} onChange={e => onHeaderChange({ section: e.target.value.toUpperCase().startsWith('A') ? 'AC' : 'G' })} />
+              <Input
+                value={header.section || ""}
+                onChange={(e) =>
+                  onHeaderChange({
+                    section: e.target.value.toUpperCase().startsWith("A")
+                      ? "AC"
+                      : "G",
+                  })
+                }
+              />
             </div>
             <div className="col-span-2">
               <Label>Bill No (system)</Label>
-              <Input value={header.waiter_no || ''} readOnly />
+              <Input value={header.waiter_no || ""} readOnly />
             </div>
           </div>
 
@@ -249,22 +380,44 @@ function Billing({ settings, draft, setDraft }) {
           <div className="grid grid-cols-6 gap-3 items-end">
             <div className="col-span-3">
               <Label>Item Code (alpha or numeric)</Label>
-              <Input placeholder="e.g., IDL or 101" value={entryCode} onChange={e => setEntryCode(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') addItem(); }} />
+              <Input
+                placeholder="e.g., IDL or 101"
+                value={entryCode}
+                onChange={(e) => setEntryCode(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") addItem();
+                }}
+              />
             </div>
             <div className="col-span-1">
               <Label>Qty</Label>
-              <Input type="number" min={1} value={qty} onChange={e => setQty(parseInt(e.target.value || '1', 10))} />
+              <Input
+                type="number"
+                min={1}
+                value={qty}
+                onChange={(e) => setQty(parseInt(e.target.value || "1", 10))}
+              />
             </div>
             <div className="col-span-2 flex gap-2">
               <Button onClick={addItem}>Add</Button>
-              <Button variant="secondary" onClick={() => { setDraft({ ...draft, lines: [] }); setPreview(null); }}>Clear</Button>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setDraft({ ...draft, lines: [] });
+                  setPreview(null);
+                }}
+              >
+                Clear
+              </Button>
             </div>
           </div>
 
           {preview && (
             <div className="rounded-md border bg-amber-50 px-4 py-2 text-sm">
               <div className="flex justify-between">
-                <div className="font-medium">{preview.name} ({preview.alpha_code}/{preview.numeric_code})</div>
+                <div className="font-medium">
+                  {preview.name} ({preview.alpha_code}/{preview.numeric_code})
+                </div>
                 <div>Rate now: ₹ {effectiveRate}</div>
               </div>
               <div className="mt-1 grid grid-cols-3 gap-2">
@@ -293,33 +446,74 @@ function Billing({ settings, draft, setDraft }) {
                   <TableCell>{l.name}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-2">
-                      <Button size="sm" variant="secondary" onClick={() => updateQty(idx, l.quantity - 1)}><Minus size={14}/></Button>
-                      <Input className="w-16 text-right" type="number" min={1} value={l.quantity} onChange={e => updateQty(idx, parseInt(e.target.value || '1', 10))} />
-                      <Button size="sm" onClick={() => updateQty(idx, l.quantity + 1)}><Plus size={14}/></Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => updateQty(idx, l.quantity - 1)}
+                      >
+                        <Minus size={14} />
+                      </Button>
+                      <Input
+                        className="w-16 text-right"
+                        type="number"
+                        min={1}
+                        value={l.quantity}
+                        onChange={(e) =>
+                          updateQty(idx, parseInt(e.target.value || "1", 10))
+                        }
+                      />
+                      <Button
+                        size="sm"
+                        onClick={() => updateQty(idx, l.quantity + 1)}
+                      >
+                        <Plus size={14} />
+                      </Button>
                     </div>
                   </TableCell>
                   <TableCell className="text-right">₹ {l.unit_price}</TableCell>
-                  <TableCell className="text-right">₹ {l.line_total.toFixed(2)}</TableCell>
-                  <TableCell className="text-right"><Button variant="destructive" size="sm" onClick={() => removeLine(idx)}>Remove</Button></TableCell>
+                  <TableCell className="text-right">
+                    ₹ {l.line_total.toFixed(2)}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={() => removeLine(idx)}
+                    >
+                      Remove
+                    </Button>
+                  </TableCell>
                 </TableRow>
               ))}
               <TableRow>
-                <TableCell colSpan={5} className="text-right font-medium">Subtotal</TableCell>
-                <TableCell className="text-right">₹ {subtotal.toFixed(2)}</TableCell>
+                <TableCell colSpan={5} className="text-right font-medium">
+                  Subtotal
+                </TableCell>
+                <TableCell className="text-right">
+                  ₹ {subtotal.toFixed(2)}
+                </TableCell>
               </TableRow>
               <TableRow>
-                <TableCell colSpan={5} className="text-right font-medium">Tax 5%</TableCell>
+                <TableCell colSpan={5} className="text-right font-medium">
+                  Tax 5%
+                </TableCell>
                 <TableCell className="text-right">₹ {tax.toFixed(2)}</TableCell>
               </TableRow>
               <TableRow>
-                <TableCell colSpan={5} className="text-right font-semibold">Grand Total</TableCell>
-                <TableCell className="text-right font-semibold">₹ {total.toFixed(2)}</TableCell>
+                <TableCell colSpan={5} className="text-right font-semibold">
+                  Grand Total
+                </TableCell>
+                <TableCell className="text-right font-semibold">
+                  ₹ {total.toFixed(2)}
+                </TableCell>
               </TableRow>
             </TableBody>
           </Table>
 
           <div className="flex justify-end gap-2 mt-3">
-            <Button onClick={createBill} className="gap-2"><Printer size={16}/> Print Bill</Button>
+            <Button onClick={createBill} className="gap-2">
+              <Printer size={16} /> Print Bill
+            </Button>
           </div>
         </CardContent>
       </Card>
@@ -333,20 +527,44 @@ function Billing({ settings, draft, setDraft }) {
 }
 
 function BillPrint({ settings }) {
-  const data = (typeof window !== 'undefined' && window.printBillData) || null;
-  const cfg = settings || (typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('settings') || '{}') : {});
+  const data = (typeof window !== "undefined" && window.printBillData) || null;
+  const cfg =
+    settings ||
+    (typeof window !== "undefined"
+      ? JSON.parse(localStorage.getItem("settings") || "{}")
+      : {});
   if (!data) return null;
   return (
     <div className="print-receipt">
       <div className="text-center font-bold text-base">{data.hotel_name}</div>
-      {cfg?.address ? <div className="text-center text-xs">{cfg.address}</div> : null}
-      <div className="text-center text-xs">GST Included{cfg?.gstin ? ` • GSTIN: ${cfg.gstin}` : ''}{cfg?.phone ? ` • Ph: ${cfg.phone}` : ''}</div>
+      {cfg?.address ? (
+        <div className="text-center text-xs">{cfg.address}</div>
+      ) : null}
+      <div className="text-center text-xs">
+        GST Included{cfg?.gstin ? ` • GSTIN: ${cfg.gstin}` : ""}
+        {cfg?.phone ? ` • Ph: ${cfg.phone}` : ""}
+      </div>
       <div className="divider" />
-      <div className="row"><span>Bill No</span><span>{data.header.bill_number}</span></div>
-      <div className="row"><span>Date</span><span>{new Date(data.created_at).toLocaleString()}</span></div>
-      <div className="row"><span>Table</span><span>{data.header.table_no}</span></div>
-      <div className="row"><span>Waiter</span><span>{data.header.waiter_no}</span></div>
-      <div className="row"><span>Section</span><span>{data.header.section}</span></div>
+      <div className="row">
+        <span>Bill No</span>
+        <span>{data.header.bill_number}</span>
+      </div>
+      <div className="row">
+        <span>Date</span>
+        <span>{new Date(data.created_at).toLocaleString()}</span>
+      </div>
+      <div className="row">
+        <span>Table</span>
+        <span>{data.header.table_no}</span>
+      </div>
+      <div className="row">
+        <span>Waiter</span>
+        <span>{data.header.waiter_no}</span>
+      </div>
+      <div className="row">
+        <span>Section</span>
+        <span>{data.header.section}</span>
+      </div>
       <div className="divider" />
       <table className="w-full text-xs">
         <thead>
@@ -369,9 +587,18 @@ function BillPrint({ settings }) {
         </tbody>
       </table>
       <div className="divider" />
-      <div className="row"><span>Subtotal</span><span>₹ {data.subtotal.toFixed(2)}</span></div>
-      <div className="row"><span>Tax (5%)</span><span>₹ {data.tax_amount.toFixed(2)}</span></div>
-      <div className="row total"><span>Total</span><span>₹ {data.grand_total.toFixed(2)}</span></div>
+      <div className="row">
+        <span>Subtotal</span>
+        <span>₹ {data.subtotal.toFixed(2)}</span>
+      </div>
+      <div className="row">
+        <span>Tax (5%)</span>
+        <span>₹ {data.tax_amount.toFixed(2)}</span>
+      </div>
+      <div className="row total">
+        <span>Total</span>
+        <span>₹ {data.grand_total.toFixed(2)}</span>
+      </div>
       <div className="center mt-2 text-xs">Thank you! Visit again</div>
     </div>
   );
@@ -395,31 +622,48 @@ function SettingsEditor({ settings, onChange, canEdit }) {
   return (
     <Card className="bg-white/80 backdrop-blur">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2"><Save size={16}/> Receipt Settings (Admin Full)</CardTitle>
+        <CardTitle className="flex items-center gap-2">
+          <Save size={16} /> Receipt Settings (Admin Full)
+        </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="grid grid-cols-2 gap-3">
           <div>
             <Label>Hotel Name</Label>
-            <Input value={form.hotel_name || ''} onChange={e => setForm({ ...form, hotel_name: e.target.value })} />
+            <Input
+              value={form.hotel_name || ""}
+              onChange={(e) => setForm({ ...form, hotel_name: e.target.value })}
+            />
           </div>
           <div>
             <Label>Phone</Label>
-            <Input value={form.phone || ''} onChange={e => setForm({ ...form, phone: e.target.value })} />
+            <Input
+              value={form.phone || ""}
+              onChange={(e) => setForm({ ...form, phone: e.target.value })}
+            />
           </div>
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
             <Label>GSTIN</Label>
-            <Input value={form.gstin || ''} onChange={e => setForm({ ...form, gstin: e.target.value })} />
+            <Input
+              value={form.gstin || ""}
+              onChange={(e) => setForm({ ...form, gstin: e.target.value })}
+            />
           </div>
           <div>
             <Label>Address</Label>
-            <Textarea rows={2} value={form.address || ''} onChange={e => setForm({ ...form, address: e.target.value })} />
+            <Textarea
+              rows={2}
+              value={form.address || ""}
+              onChange={(e) => setForm({ ...form, address: e.target.value })}
+            />
           </div>
         </div>
         <div className="flex justify-end">
-          <Button onClick={save} className="gap-2"><Save size={14}/> Save</Button>
+          <Button onClick={save} className="gap-2">
+            <Save size={14} /> Save
+          </Button>
         </div>
       </CardContent>
     </Card>
@@ -428,39 +672,81 @@ function SettingsEditor({ settings, onChange, canEdit }) {
 
 function CredentialsManager() {
   const [rows, setRows] = useState([]);
-  const [form, setForm] = useState({ staff_code: "", role: "clerk", password: "", password_l1: "", password_root: "", active: true });
+  const [form, setForm] = useState({
+    staff_code: "",
+    role: "clerk",
+    password: "",
+    password_l1: "",
+    password_root: "",
+    active: true,
+  });
 
-  const load = async () => { try { const res = await axios.get(`${API}/credentials`); setRows(res.data); } catch {} };
-  useEffect(() => { load(); }, []);
+  const load = async () => {
+    try {
+      const res = await axios.get(`${API}/credentials`);
+      setRows(res.data);
+    } catch {}
+  };
+  useEffect(() => {
+    load();
+  }, []);
 
   const add = async () => {
     try {
-      const payload = { ...form, staff_code: (form.staff_code || '').toUpperCase() };
+      const payload = {
+        ...form,
+        staff_code: (form.staff_code || "").toUpperCase(),
+      };
       const res = await axios.post(`${API}/credentials`, payload);
       toast.success("Credential added");
-      setForm({ staff_code: "", role: "clerk", password: "", password_l1: "", password_root: "", active: true });
+      setForm({
+        staff_code: "",
+        role: "clerk",
+        password: "",
+        password_l1: "",
+        password_root: "",
+        active: true,
+      });
       load();
-    } catch (e) { toast.error(e?.response?.data?.detail || "Failed to add"); }
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Failed to add");
+    }
   };
-  const del = async (id) => { try { await axios.delete(`${API}/credentials/${id}`); toast.success("Deleted"); load(); } catch {} };
-  const toggleActive = async (id, active) => { try { await axios.put(`${API}/credentials/${id}`, { active: !active }); load(); } catch {} };
+  const del = async (id) => {
+    try {
+      await axios.delete(`${API}/credentials/${id}`);
+      toast.success("Deleted");
+      load();
+    } catch {}
+  };
+  const toggleActive = async (id, active) => {
+    try {
+      await axios.put(`${API}/credentials/${id}`, { active: !active });
+      load();
+    } catch {}
+  };
   const editRow = async (r) => {
     try {
       const newRole = window.prompt("Role (clerk/admin)", r.role) || r.role;
       let payload = { role: newRole };
-      if (newRole === 'admin') {
+      if (newRole === "admin") {
         const l1 = window.prompt("Admin L1 password (blank to keep)", "");
         const root = window.prompt("Admin ROOT password (blank to keep)", "");
-        if (l1 !== null && l1 !== '') payload.password_l1 = l1;
-        if (root !== null && root !== '') payload.password_root = root;
+        if (l1 !== null && l1 !== "") payload.password_l1 = l1;
+        if (root !== null && root !== "") payload.password_root = root;
       } else {
-        const pw = window.prompt("Clerk password (blank to clear)", r.password || "");
+        const pw = window.prompt(
+          "Clerk password (blank to clear)",
+          r.password || ""
+        );
         if (pw !== null) payload.password = pw; // allow empty to clear
       }
       await axios.put(`${API}/credentials/${r.id}`, payload);
       toast.success("Updated");
       load();
-    } catch (e) { toast.error(e?.response?.data?.detail || "Failed to update"); }
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Failed to update");
+    }
   };
 
   return (
@@ -472,32 +758,54 @@ function CredentialsManager() {
         <div className="grid grid-cols-6 gap-2 items-end">
           <div className="col-span-1">
             <Label>Code</Label>
-            <Input value={form.staff_code} onChange={e => setForm({ ...form, staff_code: e.target.value })} placeholder="3 letters" />
+            <Input
+              value={form.staff_code}
+              onChange={(e) => setForm({ ...form, staff_code: e.target.value })}
+              placeholder="3 letters"
+            />
           </div>
           <div className="col-span-1">
             <Label>Role</Label>
-            <Select value={form.role} onValueChange={(v) => setForm({ ...form, role: v })}>
-              <SelectTrigger><SelectValue placeholder="Role" /></SelectTrigger>
+            <Select
+              value={form.role}
+              onValueChange={(v) => setForm({ ...form, role: v })}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Role" />
+              </SelectTrigger>
               <SelectContent>
                 <SelectItem value="clerk">clerk</SelectItem>
                 <SelectItem value="admin">admin</SelectItem>
               </SelectContent>
             </Select>
           </div>
-          {form.role === 'clerk' ? (
+          {form.role === "clerk" ? (
             <div className="col-span-2">
               <Label>Clerk Password (optional)</Label>
-              <Input value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} />
+              <Input
+                value={form.password}
+                onChange={(e) => setForm({ ...form, password: e.target.value })}
+              />
             </div>
           ) : (
             <>
               <div className="col-span-2">
                 <Label>Admin L1 Password</Label>
-                <Input value={form.password_l1} onChange={e => setForm({ ...form, password_l1: e.target.value })} />
+                <Input
+                  value={form.password_l1}
+                  onChange={(e) =>
+                    setForm({ ...form, password_l1: e.target.value })
+                  }
+                />
               </div>
               <div className="col-span-2">
                 <Label>Admin Root Password</Label>
-                <Input value={form.password_root} onChange={e => setForm({ ...form, password_root: e.target.value })} />
+                <Input
+                  value={form.password_root}
+                  onChange={(e) =>
+                    setForm({ ...form, password_root: e.target.value })
+                  }
+                />
               </div>
             </>
           )}
@@ -516,15 +824,26 @@ function CredentialsManager() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {rows.map(r => (
+            {rows.map((r) => (
               <TableRow key={r.id}>
                 <TableCell>{r.staff_code}</TableCell>
                 <TableCell>{r.role}</TableCell>
-                <TableCell>{r.active ? 'active' : 'inactive'}</TableCell>
+                <TableCell>{r.active ? "active" : "inactive"}</TableCell>
                 <TableCell className="text-right flex gap-2 justify-end">
-                  <Button variant="secondary" onClick={() => toggleActive(r.id, r.active)}>{r.active ? 'Disable' : 'Enable'}</Button>
+                  <Button
+                    variant="secondary"
+                    onClick={() => toggleActive(r.id, r.active)}
+                  >
+                    {r.active ? "Disable" : "Enable"}
+                  </Button>
                   <Button onClick={() => editRow(r)}>Edit</Button>
-                  <Button variant="destructive" onClick={() => del(r.id)} className="gap-1"><Trash2 size={14}/> Delete</Button>
+                  <Button
+                    variant="destructive"
+                    onClick={() => del(r.id)}
+                    className="gap-1"
+                  >
+                    <Trash2 size={14} /> Delete
+                  </Button>
                 </TableCell>
               </TableRow>
             ))}
@@ -538,7 +857,14 @@ function CredentialsManager() {
 function AdminPanel({ mode, settings, onSettings }) {
   const isAdmin = mode === "admin-limited" || mode === "admin-full";
   if (!isAdmin) return null;
-  const entries = ["pending", "update", "rectify", "reindex", "create", "report"];
+  const entries = [
+    "pending",
+    "update",
+    "rectify",
+    "reindex",
+    "create",
+    "report",
+  ];
   return (
     <div className="space-y-4">
       <Card className="bg-white/80 backdrop-blur">
@@ -547,13 +873,19 @@ function AdminPanel({ mode, settings, onSettings }) {
         </CardHeader>
         <CardContent>
           <ul className="list-disc ml-5">
-            {entries.map(e => <li key={e}>{e}</li>)}
+            {entries.map((e) => (
+              <li key={e}>{e}</li>
+            ))}
           </ul>
         </CardContent>
       </Card>
-      {mode === 'admin-full' && (
+      {mode === "admin-full" && (
         <>
-          <SettingsEditor settings={settings} onChange={onSettings} canEdit={true} />
+          <SettingsEditor
+            settings={settings}
+            onChange={onSettings}
+            canEdit={true}
+          />
           <CredentialsManager />
         </>
       )}
@@ -566,52 +898,104 @@ function App() {
   const isAdmin = mode === "admin-limited" || mode === "admin-full";
   const [settings, setSettings] = useState(null);
   const [billingDraft, setBillingDraft] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('billingDraft')) || { header: { table_no: "", party_no: "1", waiter_no: "", section: "G", bill_number: "" }, lines: [] }; } catch { return { header: { table_no: "", party_no: "1", waiter_no: "", section: "G", bill_number: "" }, lines: [] }; }
+    try {
+      return (
+        JSON.parse(localStorage.getItem("billingDraft")) || {
+          header: {
+            table_no: "",
+            party_no: "1",
+            waiter_no: "",
+            section: "G",
+            bill_number: "",
+          },
+          lines: [],
+        }
+      );
+    } catch {
+      return {
+        header: {
+          table_no: "",
+          party_no: "1",
+          waiter_no: "",
+          section: "G",
+          bill_number: "",
+        },
+        lines: [],
+      };
+    }
   });
 
   const loadSettings = async () => {
     try {
       const res = await axios.get(`${API}/settings`);
       setSettings(res.data);
-      if (typeof window !== 'undefined') {
+      if (typeof window !== "undefined") {
         window.__settings__ = res.data;
-        try { localStorage.setItem('settings', JSON.stringify(res.data)); } catch {}
+        try {
+          localStorage.setItem("settings", JSON.stringify(res.data));
+        } catch {}
       }
-    } catch (e) { /* ignore */ }
+    } catch (e) {
+      /* ignore */
+    }
   };
 
-  useEffect(() => { loadSettings(); }, []);
+  useEffect(() => {
+    loadSettings();
+  }, []);
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-amber-50 to-orange-50 text-neutral-800">
       <Toaster position="top-right" />
       <div className="max-w-6xl mx-auto px-6 py-8">
         <div className="mb-6">
-          <h1 className="text-2xl font-semibold tracking-tight">Udupi Anand Bhavan — Billing System</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Udupi Anand Bhavan — Billing System
+          </h1>
           <p className="text-sm text-neutral-600">Charminar, Hyderabad</p>
         </div>
 
-        {mode === 'none' ? (
-          <div className="max-w-3xl"><LoginPanel onMode={setMode} /></div>
+        {mode === "none" ? (
+          <div className="max-w-3xl">
+            <LoginPanel onMode={setMode} />
+          </div>
         ) : (
           <>
             <Tabs defaultValue="billing" className="">
               <TabsList className="bg-white/70 backdrop-blur border">
-                <TabsTrigger value="billing" className="gap-1"><FileText size={14}/> Billing</TabsTrigger>
-                <TabsTrigger value="menu" className="gap-1"><ListOrdered size={14}/> Food Menu</TabsTrigger>
+                <TabsTrigger value="billing" className="gap-1">
+                  <FileText size={14} /> Billing
+                </TabsTrigger>
+                <TabsTrigger value="menu" className="gap-1">
+                  <ListOrdered size={14} /> Food Menu
+                </TabsTrigger>
                 {isAdmin && (
-                  <TabsTrigger value="admin" className="gap-1"><LockKeyhole size={14}/> Admin</TabsTrigger>
+                  <TabsTrigger value="admin" className="gap-1">
+                    <LockKeyhole size={14} /> Admin
+                  </TabsTrigger>
                 )}
               </TabsList>
               <TabsContent value="billing" className="mt-4">
-                <Billing settings={settings} draft={billingDraft} setDraft={setBillingDraft} />
+                <Billing
+                  settings={settings}
+                  draft={billingDraft}
+                  setDraft={setBillingDraft}
+                />
               </TabsContent>
               <TabsContent value="menu" className="mt-4">
                 <FoodMenu />
               </TabsContent>
               {isAdmin && (
                 <TabsContent value="admin" className="mt-4">
-                  <AdminPanel mode={mode} settings={settings} onSettings={(s) => { setSettings(s); if (typeof window !== 'undefined') window.__settings__ = s; }} />
+                  <AdminPanel
+                    mode={mode}
+                    settings={settings}
+                    onSettings={(s) => {
+                      setSettings(s);
+                      if (typeof window !== "undefined")
+                        window.__settings__ = s;
+                    }}
+                  />
                 </TabsContent>
               )}
             </Tabs>

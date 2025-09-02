@@ -76,8 +76,8 @@ class Bill(BaseModel):
     hotel_name: str
 
 class StaffLoginRequest(BaseModel):
-    staff_code: str  # e.g., SHI
-    password: Optional[str] = None  # required for admin, optional for clerk
+    staff_code: str
+    is_root: bool = False
 
 class StaffLoginResponse(BaseModel):
     mode: Literal['clerk', 'admin-limited', 'admin-full']
@@ -100,24 +100,15 @@ class Credential(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     staff_code: str
     role: Literal['clerk', 'admin']
-    password: Optional[str] = None           # for clerks (optional)
-    password_l1: Optional[str] = None        # for admin limited
-    password_root: Optional[str] = None      # for admin full
     active: bool = True
 
 class CredentialCreate(BaseModel):
     staff_code: str
     role: Literal['clerk', 'admin']
-    password: Optional[str] = None
-    password_l1: Optional[str] = None
-    password_root: Optional[str] = None
     active: bool = True
 
 class CredentialUpdate(BaseModel):
     role: Optional[Literal['clerk', 'admin']] = None
-    password: Optional[str] = None
-    password_l1: Optional[str] = None
-    password_root: Optional[str] = None
     active: Optional[bool] = None
 
 # Helpers
@@ -144,10 +135,10 @@ async def seed_credentials_if_empty():
     if count == 0:
         # Default admin and a sample clerk
         admin = Credential(
-            staff_code='SHI', role='admin', password_l1='udupi-l1', password_root='udupi-root', active=True
+            staff_code='SHI', role='admin', active=True
         )
         clerk = Credential(
-            staff_code='CLK', role='clerk', password=None, active=True
+            staff_code='CLK', role='clerk', active=True
         )
         await db.credentials.insert_many([admin.model_dump(), clerk.model_dump()])
 
@@ -206,19 +197,16 @@ async def staff_login(payload: StaffLoginRequest):
 
     cred = Credential(**cred_doc)
     if cred.role == 'admin':
-        if not payload.password:
-            raise HTTPException(status_code=401, detail='Password required')
-        if cred.password_l1 and payload.password == cred.password_l1:
-            return StaffLoginResponse(mode='admin-limited')
-        if cred.password_root and payload.password == cred.password_root:
+        if payload.is_root:
             return StaffLoginResponse(mode='admin-full')
-        raise HTTPException(status_code=401, detail='Invalid admin password')
-    else:
-        # clerk
-        if cred.password is not None:
-            if payload.password != cred.password:
-                raise HTTPException(status_code=401, detail='Invalid clerk password')
-        return StaffLoginResponse(mode='clerk')
+        else:
+            return StaffLoginResponse(mode='admin-limited')
+    else: # clerk
+        if code == 'CLK':
+             return StaffLoginResponse(mode='clerk')
+        else:
+            raise HTTPException(status_code=401, detail='Invalid credentials')
+
 
 # Credentials management (no auth in MVP; UI limits to admin-full)
 @api.get('/credentials', response_model=List[Credential])
@@ -235,9 +223,6 @@ async def create_credential(payload: CredentialCreate):
     cred = Credential(
         staff_code=code,
         role=payload.role,
-        password=payload.password,
-        password_l1=payload.password_l1,
-        password_root=payload.password_root,
         active=payload.active,
     )
     await db.credentials.insert_one(cred.model_dump())
