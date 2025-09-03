@@ -4,13 +4,13 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, date
 from zoneinfo import ZoneInfo
 import os
 import uuid
 import psycopg2
 from psycopg2.extras import RealDictCursor
-import json # Import json for serializing items_ordered
+import json
 
 # Load env
 ROOT_DIR = Path(__file__).parent
@@ -44,14 +44,6 @@ class MenuItem(BaseModel):
     price_ac: float
     is_active: bool = True
 
-class MenuItemCreate(BaseModel):
-    name: str
-    alpha_code: str
-    numeric_code: str
-    price_fixed: float
-    price_general: float
-    price_ac: float
-
 class BillItem(BaseModel):
     code: str
     name: str
@@ -62,11 +54,9 @@ class BillItem(BaseModel):
 class BillHeader(BaseModel):
     table_no: str
     party_no: str
-    waiter_no: str
     section: Literal['AC', 'G']
     bill_number: Optional[str] = None
 
-# Expanded Bill model to include all receipt details
 class Bill(BaseModel):
     id: str
     header: BillHeader
@@ -76,10 +66,12 @@ class Bill(BaseModel):
     tax_amount: float
     grand_total: float
     created_at: str
+    bill_date: date
     hotel_name: str
     gstin: Optional[str] = ""
     phone: Optional[str] = ""
     address: Optional[str] = ""
+    modified_from_bill_id: Optional[str] = None
 
 class StaffLoginRequest(BaseModel):
     staff_code: str
@@ -101,78 +93,13 @@ class SettingsUpdate(BaseModel):
     phone: Optional[str] = None
     address: Optional[str] = None
 
-class Credential(BaseModel):
-    id: str
-    staff_code: str
-    role: Literal['clerk', 'admin']
-    active: bool = True
-
-class CredentialCreate(BaseModel):
-    staff_code: str
-    role: Literal['clerk', 'admin']
-    active: bool = True
-
-def create_tables():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS menu (
-            id UUID PRIMARY KEY,
-            name VARCHAR(255) NOT NULL,
-            alpha_code VARCHAR(10) UNIQUE NOT NULL,
-            numeric_code VARCHAR(10) UNIQUE NOT NULL,
-            price_fixed NUMERIC(10, 2) NOT NULL,
-            price_general NUMERIC(10, 2) NOT NULL,
-            price_ac NUMERIC(10, 2) NOT NULL,
-            is_active BOOLEAN DEFAULT TRUE
-        );
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS bills (
-            id UUID PRIMARY KEY,
-            table_number VARCHAR(10),
-            party_number VARCHAR(10),
-            bill_number VARCHAR(255),
-            section VARCHAR(2),
-            items_ordered JSONB,
-            total_amount NUMERIC(10, 2),
-            created_at TIMESTAMPTZ
-        );
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS credentials (
-            id UUID PRIMARY KEY,
-            staff_code VARCHAR(10) UNIQUE NOT NULL,
-            role VARCHAR(20) NOT NULL,
-            active BOOLEAN DEFAULT TRUE
-        );
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS settings (
-            id UUID PRIMARY KEY,
-            hotel_name VARCHAR(255),
-            gstin VARCHAR(255),
-            phone VARCHAR(20),
-            address TEXT
-        );
-    """)
-    conn.commit()
-    cursor.close()
-    conn.close()
-
-def now_local_iso() -> str:
-    return datetime.now(TZ).isoformat()
 
 def get_settings_doc():
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     cursor.execute("SELECT * FROM settings LIMIT 1")
     settings = cursor.fetchone()
-    cursor.close()
-    conn.close()
     if not settings:
-        conn = get_db_connection()
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
         new_id = str(uuid.uuid4())
         cursor.execute(
             "INSERT INTO settings (id, hotel_name) VALUES (%s, %s) RETURNING *",
@@ -180,14 +107,13 @@ def get_settings_doc():
         )
         settings = cursor.fetchone()
         conn.commit()
-        cursor.close()
-        conn.close()
+    cursor.close()
+    conn.close()
     return settings
 
 @app.on_event('startup')
 async def on_startup():
-    create_tables()
-    get_settings_doc() # Ensure default settings exist on startup
+    get_settings_doc()
 
 @api.get('/')
 async def root():
@@ -218,64 +144,30 @@ async def list_menu():
     conn.close()
     return items
 
-@api.post('/menu', response_model=MenuItem)
-async def create_menu(item: MenuItemCreate):
-    conn = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
-    try:
-        new_id = str(uuid.uuid4())
-        cursor.execute(
-            """
-            INSERT INTO menu (id, name, alpha_code, numeric_code, price_fixed, price_general, price_ac, is_active)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING *
-            """,
-            (new_id, item.name, item.alpha_code.upper(), item.numeric_code.upper(), item.price_fixed, item.price_general, item.price_ac, True)
-        )
-        new_item = cursor.fetchone()
-        conn.commit()
-    except psycopg2.IntegrityError:
-        conn.rollback()
-        raise HTTPException(status_code=409, detail='Code already exists')
-    finally:
-        cursor.close()
-        conn.close()
-    return new_item
-
-@api.delete('/menu/{item_id}')
-async def delete_menu_item(item_id: str):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM menu WHERE id = %s", (item_id,))
-    if cursor.rowcount == 0:
-        raise HTTPException(status_code=404, detail="Item not found")
-    conn.commit()
-    cursor.close()
-    conn.close()
-    return {"status": "deleted"}
-
 @api.get('/menu/lookup/{code}', response_model=MenuItem)
 async def lookup_menu(code: str):
+    code_upper = code.strip().upper()
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("SELECT * FROM menu WHERE alpha_code = %s OR numeric_code = %s", (code.upper(), code.upper()))
+    cursor.execute("SELECT * FROM menu WHERE alpha_code = %s OR numeric_code = %s", (code_upper, code_upper))
     item = cursor.fetchone()
     cursor.close()
     conn.close()
     if not item:
         raise HTTPException(status_code=404, detail='Item not found')
-    return item
+    return MenuItem(**item)
 
 class BillCreateRequest(BaseModel):
     class Header(BaseModel):
         table_no: str
         party_no: str
-        waiter_no: str
         section: Literal['AC', 'G']
         bill_number: Optional[str] = None
     header: Header
     item_codes: List[str]
     quantities: List[int]
+    bill_date: date
+    modified_from_bill_id: Optional[str] = None
 
 @api.post('/bill', response_model=Bill)
 async def create_bill(payload: BillCreateRequest):
@@ -293,6 +185,8 @@ async def create_bill(payload: BillCreateRequest):
         cursor.execute("SELECT * FROM menu WHERE alpha_code = %s OR numeric_code = %s", (code.upper(), code.upper()))
         item_data = cursor.fetchone()
         if not item_data:
+            cursor.close()
+            conn.close()
             raise HTTPException(status_code=404, detail=f'Item not found: {code}')
         
         unit_price = float(item_data[price_field])
@@ -304,17 +198,17 @@ async def create_bill(payload: BillCreateRequest):
     tax_percent = 5.0
     tax_amount = round(subtotal * tax_percent / 100.0, 2)
     grand_total = round(subtotal + tax_amount, 2)
-    bill_no = payload.header.waiter_no
+    bill_no = payload.header.bill_number
     bill_id = str(uuid.uuid4())
-    created_at = now_local_iso()
+    created_at = datetime.now(TZ)
     
     items_json = json.dumps([item.dict() for item in items])
     cursor.execute(
         """
-        INSERT INTO bills (id, table_number, party_number, bill_number, section, items_ordered, total_amount, created_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO bills (id, table_number, party_number, bill_number, section, items_ordered, total_amount, created_at, bill_date, modified_from_bill_id)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
-        (bill_id, payload.header.table_no, payload.header.party_no, bill_no, payload.header.section, items_json, grand_total, created_at)
+        (bill_id, payload.header.table_no, payload.header.party_no, bill_no, payload.header.section, items_json, grand_total, created_at, payload.bill_date, payload.modified_from_bill_id)
     )
     conn.commit()
     cursor.close()
@@ -330,43 +224,93 @@ async def create_bill(payload: BillCreateRequest):
         tax_percent=tax_percent,
         tax_amount=tax_amount,
         grand_total=grand_total,
-        created_at=created_at,
+        created_at=created_at.isoformat(),
+        bill_date=payload.bill_date,
         hotel_name=settings.get('hotel_name', DEFAULT_HOTEL_NAME),
         gstin=settings.get('gstin', ""),
         phone=settings.get('phone', ""),
-        address=settings.get('address', "")
+        address=settings.get('address', ""),
+        modified_from_bill_id=payload.modified_from_bill_id
     )
     return bill
 
-@api.get('/settings', response_model=Settings)
-async def get_settings():
-    settings = get_settings_doc()
-    if not settings:
-        raise HTTPException(status_code=404, detail="Settings not found")
-    return settings
-
-@api.put('/settings', response_model=Settings)
-async def update_settings(payload: SettingsUpdate):
+@api.get('/bills/by_date', response_model=List[Bill])
+async def get_bills_by_date(bill_date: date):
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("SELECT id FROM settings LIMIT 1")
-    setting_id_row = cursor.fetchone()
-    setting_id = setting_id_row['id']
-    
-    update_data = payload.dict(exclude_unset=True)
-    if not update_data:
-        raise HTTPException(status_code=400, detail="No update data provided")
-    
-    set_clause = ", ".join([f"{key} = %s" for key in update_data.keys()])
-    values = list(update_data.values())
-    values.append(setting_id)
-
-    cursor.execute(f"UPDATE settings SET {set_clause} WHERE id = %s RETURNING *", tuple(values))
-    updated_settings = cursor.fetchone()
-    conn.commit()
+    cursor.execute(
+        "SELECT * FROM bills WHERE bill_date = %s ORDER BY created_at DESC",
+        (bill_date,)
+    )
+    bills_data = cursor.fetchall()
     cursor.close()
     conn.close()
-    return updated_settings
+
+    settings = get_settings_doc()
+    bills = []
+    for bill_data in bills_data:
+        subtotal_calc = float(bill_data['total_amount']) / 1.05 if bill_data['total_amount'] is not None else 0
+        bills.append(Bill(
+            id=str(bill_data['id']),
+            header=BillHeader(
+                table_no=bill_data['table_number'],
+                party_no=bill_data['party_number'],
+                section=bill_data['section'],
+                bill_number=bill_data['bill_number']
+            ),
+            items=[BillItem(**item) for item in (bill_data['items_ordered'] or [])],
+            subtotal=subtotal_calc,
+            tax_percent=5.0,
+            tax_amount=float(bill_data['total_amount']) - subtotal_calc if bill_data['total_amount'] is not None else 0,
+            grand_total=float(bill_data['total_amount'] or 0),
+            created_at=bill_data['created_at'].isoformat(),
+            bill_date=bill_data['bill_date'],
+            hotel_name=settings.get('hotel_name', DEFAULT_HOTEL_NAME),
+            gstin=settings.get('gstin', ""),
+            phone=settings.get('phone', ""),
+            address=settings.get('address', ""),
+            modified_from_bill_id=str(bill_data['modified_from_bill_id']) if bill_data.get('modified_from_bill_id') else None,
+        ))
+    return bills
+
+@api.get('/bill/last', response_model=Bill)
+async def get_last_bill(table_no: str, bill_date: date):
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    cursor.execute(
+        "SELECT * FROM bills WHERE table_number = %s AND bill_date = %s ORDER BY created_at DESC LIMIT 1",
+        (table_no, bill_date)
+    )
+    bill_data = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    if not bill_data:
+        raise HTTPException(status_code=404, detail="No bill found for this table on the given date")
+
+    settings = get_settings_doc()
+    subtotal_calc = float(bill_data['total_amount']) / 1.05 if bill_data['total_amount'] is not None else 0
+    bill = Bill(
+        id=str(bill_data['id']),
+        header=BillHeader(
+            table_no=bill_data['table_number'],
+            party_no=bill_data['party_number'],
+            section=bill_data['section'],
+            bill_number=bill_data['bill_number']
+        ),
+        items=[BillItem(**item) for item in (bill_data['items_ordered'] or [])],
+        subtotal=subtotal_calc,
+        tax_percent=5.0,
+        tax_amount=float(bill_data['total_amount']) - subtotal_calc if bill_data['total_amount'] is not None else 0,
+        grand_total=float(bill_data['total_amount'] or 0),
+        created_at=bill_data['created_at'].isoformat(),
+        bill_date=bill_data['bill_date'],
+        hotel_name=settings.get('hotel_name', DEFAULT_HOTEL_NAME),
+        gstin=settings.get('gstin', ""),
+        phone=settings.get('phone', ""),
+        address=settings.get('address', ""),
+        modified_from_bill_id=str(bill_data['modified_from_bill_id']) if bill_data.get('modified_from_bill_id') else None,
+    )
+    return bill
 
 app.add_middleware(
     CORSMiddleware,
@@ -376,3 +320,4 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(api)
+
