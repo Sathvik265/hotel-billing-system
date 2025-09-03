@@ -1,7 +1,6 @@
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
-from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
 from pathlib import Path
@@ -9,19 +8,22 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import os
 import uuid
-from pymongo import ReturnDocument
+import psycopg2
+from psycopg2.extras import RealDictCursor
+import json # Import json for serializing items_ordered
 
 # Load env
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB setup
-MONGO_URL = os.environ.get('MONGO_URL')
-if not MONGO_URL:
-    raise RuntimeError('MONGO_URL is not set')
-DB_NAME = os.environ.get('DB_NAME', 'test_database')
-client = AsyncIOMotorClient(MONGO_URL)
-db = client[DB_NAME]
+# PostgreSQL setup
+DATABASE_URL = os.environ.get('DATABASE_URL')
+if not DATABASE_URL:
+    raise RuntimeError('DATABASE_URL is not set')
+
+def get_db_connection():
+    conn = psycopg2.connect(DATABASE_URL)
+    return conn
 
 # App and router
 app = FastAPI()
@@ -33,7 +35,7 @@ TZ = ZoneInfo(os.environ.get('APP_TIMEZONE', 'Asia/Kolkata'))
 
 # Models
 class MenuItem(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    id: str
     name: str
     alpha_code: str
     numeric_code: str
@@ -51,7 +53,7 @@ class MenuItemCreate(BaseModel):
     price_ac: float
 
 class BillItem(BaseModel):
-    code: str  # can be alpha or numeric
+    code: str
     name: str
     quantity: int
     unit_price: float
@@ -62,10 +64,11 @@ class BillHeader(BaseModel):
     party_no: str
     waiter_no: str
     section: Literal['AC', 'G']
-    bill_number: Optional[str] = None  # populated by server if not provided
+    bill_number: Optional[str] = None
 
+# Expanded Bill model to include all receipt details
 class Bill(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    id: str
     header: BillHeader
     items: List[BillItem]
     subtotal: float
@@ -74,6 +77,9 @@ class Bill(BaseModel):
     grand_total: float
     created_at: str
     hotel_name: str
+    gstin: Optional[str] = ""
+    phone: Optional[str] = ""
+    address: Optional[str] = ""
 
 class StaffLoginRequest(BaseModel):
     staff_code: str
@@ -83,7 +89,7 @@ class StaffLoginResponse(BaseModel):
     mode: Literal['clerk', 'admin-limited', 'admin-full']
 
 class Settings(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    id: str
     hotel_name: str = DEFAULT_HOTEL_NAME
     gstin: Optional[str] = ""
     phone: Optional[str] = ""
@@ -95,9 +101,8 @@ class SettingsUpdate(BaseModel):
     phone: Optional[str] = None
     address: Optional[str] = None
 
-# Credentials models
 class Credential(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    id: str
     staff_code: str
     role: Literal['clerk', 'admin']
     active: bool = True
@@ -107,171 +112,156 @@ class CredentialCreate(BaseModel):
     role: Literal['clerk', 'admin']
     active: bool = True
 
-class CredentialUpdate(BaseModel):
-    role: Optional[Literal['clerk', 'admin']] = None
-    active: Optional[bool] = None
-
-# Helpers
-async def seed_menu_if_empty():
-    count = await db.menu.count_documents({})
-    if count > 0:
-        return
-    seed: List[MenuItem] = [
-        MenuItem(name='Idli', alpha_code='IDL', numeric_code='101', price_fixed=30, price_general=35, price_ac=40),
-        MenuItem(name='Vada', alpha_code='VAD', numeric_code='102', price_fixed=25, price_general=30, price_ac=35),
-        MenuItem(name='Masala Dosa', alpha_code='MDS', numeric_code='201', price_fixed=60, price_general=70, price_ac=80),
-        MenuItem(name='Plain Dosa', alpha_code='PDS', numeric_code='202', price_fixed=50, price_general=60, price_ac=70),
-        MenuItem(name='Onion Uttapam', alpha_code='OUT', numeric_code='301', price_fixed=65, price_general=75, price_ac=85),
-        MenuItem(name='Upma', alpha_code='UPM', numeric_code='302', price_fixed=35, price_general=40, price_ac=45),
-        MenuItem(name='Poori Bhaji', alpha_code='PRB', numeric_code='401', price_fixed=50, price_general=60, price_ac=70),
-        MenuItem(name='Lemon Rice', alpha_code='LMR', numeric_code='402', price_fixed=45, price_general=55, price_ac=65),
-        MenuItem(name='Curd Rice', alpha_code='CRD', numeric_code='403', price_fixed=40, price_general=50, price_ac=60),
-        MenuItem(name='Filter Coffee', alpha_code='COF', numeric_code='901', price_fixed=20, price_general=25, price_ac=30),
-    ]
-    await db.menu.insert_many([s.model_dump() for s in seed])
-
-async def seed_credentials_if_empty():
-    count = await db.credentials.count_documents({})
-    if count == 0:
-        # Default admin and a sample clerk
-        admin = Credential(
-            staff_code='SHI', role='admin', active=True
-        )
-        clerk = Credential(
-            staff_code='CLK', role='clerk', active=True
-        )
-        await db.credentials.insert_many([admin.model_dump(), clerk.model_dump()])
-
-async def get_menu_by_code(code: str) -> Optional[MenuItem]:
-    code_upper = code.strip().upper()
-    item = await db.menu.find_one({"$or": [{"alpha_code": code_upper}, {"numeric_code": code_upper}]})
-    if not item:
-        return None
-    return MenuItem(**item)
-
-async def get_settings_doc() -> Settings:
-    doc = await db.settings.find_one({})
-    if not doc:
-        default = Settings()
-        await db.settings.insert_one(default.model_dump())
-        return default
-    return Settings(**doc)
-
-async def save_settings(update: SettingsUpdate) -> Settings:
-    upd = {k: v for k, v in update.model_dump().items() if v is not None}
-    doc = await db.settings.find_one_and_update(
-        {},
-        {"$set": upd},
-        upsert=True,
-        return_document=ReturnDocument.AFTER,
-    )
-    if not doc:
-        new_doc = Settings(**{**Settings().model_dump(), **upd})
-        await db.settings.insert_one(new_doc.model_dump())
-        return new_doc
-    return Settings(**doc)
-
+def create_tables():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS menu (
+            id UUID PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
+            alpha_code VARCHAR(10) UNIQUE NOT NULL,
+            numeric_code VARCHAR(10) UNIQUE NOT NULL,
+            price_fixed NUMERIC(10, 2) NOT NULL,
+            price_general NUMERIC(10, 2) NOT NULL,
+            price_ac NUMERIC(10, 2) NOT NULL,
+            is_active BOOLEAN DEFAULT TRUE
+        );
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS bills (
+            id UUID PRIMARY KEY,
+            table_number VARCHAR(10),
+            party_number VARCHAR(10),
+            bill_number VARCHAR(255),
+            section VARCHAR(2),
+            items_ordered JSONB,
+            total_amount NUMERIC(10, 2),
+            created_at TIMESTAMPTZ
+        );
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS credentials (
+            id UUID PRIMARY KEY,
+            staff_code VARCHAR(10) UNIQUE NOT NULL,
+            role VARCHAR(20) NOT NULL,
+            active BOOLEAN DEFAULT TRUE
+        );
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            id UUID PRIMARY KEY,
+            hotel_name VARCHAR(255),
+            gstin VARCHAR(255),
+            phone VARCHAR(20),
+            address TEXT
+        );
+    """)
+    conn.commit()
+    cursor.close()
+    conn.close()
 
 def now_local_iso() -> str:
     return datetime.now(TZ).isoformat()
 
-# Startup tasks
+def get_settings_doc():
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    cursor.execute("SELECT * FROM settings LIMIT 1")
+    settings = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    if not settings:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        new_id = str(uuid.uuid4())
+        cursor.execute(
+            "INSERT INTO settings (id, hotel_name) VALUES (%s, %s) RETURNING *",
+            (new_id, DEFAULT_HOTEL_NAME)
+        )
+        settings = cursor.fetchone()
+        conn.commit()
+        cursor.close()
+        conn.close()
+    return settings
+
 @app.on_event('startup')
 async def on_startup():
-    await seed_menu_if_empty()
-    await seed_credentials_if_empty()
-    await get_settings_doc()
+    create_tables()
+    get_settings_doc() # Ensure default settings exist on startup
 
-# Routes
 @api.get('/')
 async def root():
     return {"message": "Hotel Billing API running"}
 
-# Authentication based on stored credentials
 @api.post('/auth/login', response_model=StaffLoginResponse)
 async def staff_login(payload: StaffLoginRequest):
-    code = payload.staff_code.strip().upper()
-    cred_doc = await db.credentials.find_one({"staff_code": code, "active": True})
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    cursor.execute("SELECT * FROM credentials WHERE staff_code = %s AND active = TRUE", (payload.staff_code.strip().upper(),))
+    cred_doc = cursor.fetchone()
+    cursor.close()
+    conn.close()
     if not cred_doc:
         raise HTTPException(status_code=401, detail='Invalid credentials')
-
-    cred = Credential(**cred_doc)
-    if cred.role == 'admin':
-        if payload.is_root:
-            return StaffLoginResponse(mode='admin-full')
-        else:
-            return StaffLoginResponse(mode='admin-limited')
-    else: # clerk
-        if code == 'CLK':
-             return StaffLoginResponse(mode='clerk')
-        else:
-            raise HTTPException(status_code=401, detail='Invalid credentials')
-
-
-# Credentials management (no auth in MVP; UI limits to admin-full)
-@api.get('/credentials', response_model=List[Credential])
-async def list_credentials():
-    rows = await db.credentials.find({}).sort("staff_code", 1).to_list(length=500)
-    return [Credential(**r) for r in rows]
-
-@api.post('/credentials', response_model=Credential)
-async def create_credential(payload: CredentialCreate):
-    code = payload.staff_code.strip().upper()
-    exists = await db.credentials.find_one({"staff_code": code})
-    if exists:
-        raise HTTPException(status_code=409, detail='Staff code already exists')
-    cred = Credential(
-        staff_code=code,
-        role=payload.role,
-        active=payload.active,
-    )
-    await db.credentials.insert_one(cred.model_dump())
-    return cred
-
-@api.put('/credentials/{cred_id}', response_model=Credential)
-async def update_credential(cred_id: str, payload: CredentialUpdate):
-    upd = {k: v for k, v in payload.model_dump().items() if v is not None}
-    doc = await db.credentials.find_one_and_update(
-        {"id": cred_id},
-        {"$set": upd},
-        return_document=ReturnDocument.AFTER,
-    )
-    if not doc:
-        raise HTTPException(status_code=404, detail='Credential not found')
-    return Credential(**doc)
-
-@api.delete('/credentials/{cred_id}')
-async def delete_credential(cred_id: str):
-    res = await db.credentials.delete_one({"id": cred_id})
-    if res.deleted_count == 0:
-        raise HTTPException(status_code=404, detail='Credential not found')
-    return {"status": "deleted"}
+    if cred_doc['role'] == 'admin':
+        return StaffLoginResponse(mode='admin-full' if payload.is_root else 'admin-limited')
+    else:
+        return StaffLoginResponse(mode='clerk')
 
 @api.get('/menu', response_model=List[MenuItem])
 async def list_menu():
-    items = await db.menu.find({"is_active": True}).sort("name", 1).to_list(length=1000)
-    return [MenuItem(**it) for it in items]
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    cursor.execute("SELECT * FROM menu WHERE is_active = TRUE ORDER BY name")
+    items = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return items
 
 @api.post('/menu', response_model=MenuItem)
 async def create_menu(item: MenuItemCreate):
-    exists = await db.menu.find_one({"$or": [{"alpha_code": item.alpha_code.upper()}, {"numeric_code": item.numeric_code.upper()}]})
-    if exists:
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        new_id = str(uuid.uuid4())
+        cursor.execute(
+            """
+            INSERT INTO menu (id, name, alpha_code, numeric_code, price_fixed, price_general, price_ac, is_active)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING *
+            """,
+            (new_id, item.name, item.alpha_code.upper(), item.numeric_code.upper(), item.price_fixed, item.price_general, item.price_ac, True)
+        )
+        new_item = cursor.fetchone()
+        conn.commit()
+    except psycopg2.IntegrityError:
+        conn.rollback()
         raise HTTPException(status_code=409, detail='Code already exists')
-    data = MenuItem(
-        name=item.name,
-        alpha_code=item.alpha_code.upper(),
-        numeric_code=item.numeric_code.upper(),
-        price_fixed=item.price_fixed,
-        price_general=item.price_general,
-        price_ac=item.price_ac,
-        is_active=True
-    )
-    await db.menu.insert_one(data.model_dump())
-    return data
+    finally:
+        cursor.close()
+        conn.close()
+    return new_item
+
+@api.delete('/menu/{item_id}')
+async def delete_menu_item(item_id: str):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM menu WHERE id = %s", (item_id,))
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Item not found")
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return {"status": "deleted"}
 
 @api.get('/menu/lookup/{code}', response_model=MenuItem)
 async def lookup_menu(code: str):
-    item = await get_menu_by_code(code)
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    cursor.execute("SELECT * FROM menu WHERE alpha_code = %s OR numeric_code = %s", (code.upper(), code.upper()))
+    item = cursor.fetchone()
+    cursor.close()
+    conn.close()
     if not item:
         raise HTTPException(status_code=404, detail='Item not found')
     return item
@@ -292,56 +282,92 @@ async def create_bill(payload: BillCreateRequest):
     if len(payload.item_codes) != len(payload.quantities):
         raise HTTPException(status_code=400, detail='Item codes and quantities mismatch')
 
-    price_field = 'price_ac' if payload.header.section == 'AC' else 'price_general'
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
 
+    price_field = 'price_ac' if payload.header.section == 'AC' else 'price_general'
     items: List[BillItem] = []
     subtotal = 0.0
 
     for code, qty in zip(payload.item_codes, payload.quantities):
-        item = await get_menu_by_code(code)
-        if not item:
+        cursor.execute("SELECT * FROM menu WHERE alpha_code = %s OR numeric_code = %s", (code.upper(), code.upper()))
+        item_data = cursor.fetchone()
+        if not item_data:
             raise HTTPException(status_code=404, detail=f'Item not found: {code}')
-        unit_price = getattr(item, price_field)
+        
+        unit_price = float(item_data[price_field])
         line_total = round(unit_price * qty, 2)
         subtotal += line_total
-        items.append(BillItem(code=code.upper(), name=item.name, quantity=qty, unit_price=unit_price, line_total=line_total))
+        items.append(BillItem(code=code.upper(), name=item_data['name'], quantity=qty, unit_price=unit_price, line_total=line_total))
 
     subtotal = round(subtotal, 2)
     tax_percent = 5.0
     tax_amount = round(subtotal * tax_percent / 100.0, 2)
     grand_total = round(subtotal + tax_amount, 2)
-
-    # Bill number policy: set by system as waiter_no (ignore any provided bill_number)
     bill_no = payload.header.waiter_no
+    bill_id = str(uuid.uuid4())
+    created_at = now_local_iso()
+    
+    items_json = json.dumps([item.dict() for item in items])
+    cursor.execute(
+        """
+        INSERT INTO bills (id, table_number, party_number, bill_number, section, items_ordered, total_amount, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (bill_id, payload.header.table_no, payload.header.party_no, bill_no, payload.header.section, items_json, grand_total, created_at)
+    )
+    conn.commit()
+    cursor.close()
+    conn.close()
 
-    settings = await get_settings_doc()
+    settings = get_settings_doc()
 
     bill = Bill(
-        header=BillHeader(
-            table_no=payload.header.table_no,
-            party_no=payload.header.party_no,
-            waiter_no=payload.header.waiter_no,
-            section=payload.header.section,
-            bill_number=bill_no
-        ),
+        id=bill_id,
+        header=BillHeader(**payload.header.dict()),
         items=items,
         subtotal=subtotal,
         tax_percent=tax_percent,
         tax_amount=tax_amount,
         grand_total=grand_total,
-        created_at=now_local_iso(),
-        hotel_name=settings.hotel_name or DEFAULT_HOTEL_NAME,
+        created_at=created_at,
+        hotel_name=settings.get('hotel_name', DEFAULT_HOTEL_NAME),
+        gstin=settings.get('gstin', ""),
+        phone=settings.get('phone', ""),
+        address=settings.get('address', "")
     )
-
-    await db.bills.insert_one(bill.model_dump())
     return bill
 
-# Admin stub endpoints (list only, functionalities later)
-@api.get('/admin/actions', response_model=List[str])
-async def admin_actions():
-    return ['pending', 'update', 'rectify', 'reindex', 'create', 'report']
+@api.get('/settings', response_model=Settings)
+async def get_settings():
+    settings = get_settings_doc()
+    if not settings:
+        raise HTTPException(status_code=404, detail="Settings not found")
+    return settings
 
-# Include router
+@api.put('/settings', response_model=Settings)
+async def update_settings(payload: SettingsUpdate):
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    cursor.execute("SELECT id FROM settings LIMIT 1")
+    setting_id_row = cursor.fetchone()
+    setting_id = setting_id_row['id']
+    
+    update_data = payload.dict(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No update data provided")
+    
+    set_clause = ", ".join([f"{key} = %s" for key in update_data.keys()])
+    values = list(update_data.values())
+    values.append(setting_id)
+
+    cursor.execute(f"UPDATE settings SET {set_clause} WHERE id = %s RETURNING *", tuple(values))
+    updated_settings = cursor.fetchone()
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return updated_settings
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
@@ -349,5 +375,4 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 app.include_router(api)
