@@ -37,11 +37,11 @@ import {
   SelectValue,
 } from "./components/ui/select";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL; // do not hardcode
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
 function useAdminMode() {
-  const [mode, setMode] = useState("none"); // none until login; then clerk | admin-limited | admin-full
+  const [mode, setMode] = useState("none");
   return { mode, setMode };
 }
 
@@ -51,13 +51,7 @@ function LoginPanel({ onMode }) {
   const handleKeyDown = (event) => {
     if (event.key === "Enter") {
       event.preventDefault();
-      if (event.shiftKey) {
-        // Shift + Enter pressed
-        submit(true);
-      } else {
-        // Enter pressed
-        submit(false);
-      }
+      submit(event.shiftKey);
     }
   };
 
@@ -68,11 +62,11 @@ function LoginPanel({ onMode }) {
         is_root: isRoot,
       });
       onMode(res.data.mode);
-      if (res.data.mode.includes("admin")) {
-        toast.success(`Logged in as ${res.data.mode}`);
-      } else {
-        toast.success("Clerk mode");
-      }
+      toast.success(
+        res.data.mode.includes("admin")
+          ? `Logged in as ${res.data.mode}`
+          : "Clerk mode"
+      );
     } catch (e) {
       onMode("none");
       toast.error(e?.response?.data?.detail || "Invalid login");
@@ -104,8 +98,8 @@ function LoginPanel({ onMode }) {
         </div>
         <div className="text-xs text-gray-500">
           <p>
-            Hint: Type 'clk' for clerk mode, 'shi' for admin mode, or 'shi' +
-            Shift+Enter for root admin mode.
+            Hint: Use 'CLK' for clerk, 'SHI' for admin, or 'SHI' + Shift+Enter
+            for root admin.
           </p>
         </div>
       </CardContent>
@@ -113,8 +107,17 @@ function LoginPanel({ onMode }) {
   );
 }
 
-function FoodMenu() {
+function FoodMenu({ mode }) {
   const [items, setItems] = useState([]);
+  const [newItem, setNewItem] = useState({
+    name: "",
+    alpha_code: "",
+    numeric_code: "",
+    price_fixed: "",
+    price_general: "",
+    price_ac: "",
+  });
+
   const load = async () => {
     try {
       const res = await axios.get(`${API}/menu`);
@@ -123,9 +126,43 @@ function FoodMenu() {
       toast.error("Failed to load menu");
     }
   };
+
   useEffect(() => {
     load();
   }, []);
+
+  const handleNewItemChange = (e) => {
+    const { name, value } = e.target;
+    setNewItem((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleAddItem = async () => {
+    try {
+      await axios.post(`${API}/menu`, newItem);
+      toast.success("Item added successfully");
+      setNewItem({
+        name: "",
+        alpha_code: "",
+        numeric_code: "",
+        price_fixed: "",
+        price_general: "",
+        price_ac: "",
+      });
+      load();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Failed to add item");
+    }
+  };
+
+  const handleDeleteItem = async (itemId) => {
+    try {
+      await axios.delete(`${API}/menu/${itemId}`);
+      toast.success("Item deleted successfully");
+      load();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Failed to delete item");
+    }
+  };
 
   return (
     <Card className="shadow-md bg-white/80 backdrop-blur">
@@ -135,6 +172,47 @@ function FoodMenu() {
         </CardTitle>
       </CardHeader>
       <CardContent>
+        {mode === "admin-full" && (
+          <div className="grid grid-cols-7 gap-2 mb-4 items-end">
+            <Input
+              name="name"
+              placeholder="Name"
+              value={newItem.name}
+              onChange={handleNewItemChange}
+            />
+            <Input
+              name="alpha_code"
+              placeholder="Alpha"
+              value={newItem.alpha_code}
+              onChange={handleNewItemChange}
+            />
+            <Input
+              name="numeric_code"
+              placeholder="Numeric"
+              value={newItem.numeric_code}
+              onChange={handleNewItemChange}
+            />
+            <Input
+              name="price_fixed"
+              placeholder="Fixed"
+              value={newItem.price_fixed}
+              onChange={handleNewItemChange}
+            />
+            <Input
+              name="price_general"
+              placeholder="General"
+              value={newItem.price_general}
+              onChange={handleNewItemChange}
+            />
+            <Input
+              name="price_ac"
+              placeholder="AC"
+              value={newItem.price_ac}
+              onChange={handleNewItemChange}
+            />
+            <Button onClick={handleAddItem}>Add Item</Button>
+          </div>
+        )}
         <Table>
           <TableHeader>
             <TableRow>
@@ -144,6 +222,7 @@ function FoodMenu() {
               <TableHead>Fixed</TableHead>
               <TableHead>General</TableHead>
               <TableHead>AC</TableHead>
+              {mode === "admin-full" && <TableHead>Actions</TableHead>}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -155,6 +234,17 @@ function FoodMenu() {
                 <TableCell>₹ {it.price_fixed}</TableCell>
                 <TableCell>₹ {it.price_general}</TableCell>
                 <TableCell>₹ {it.price_ac}</TableCell>
+                {mode === "admin-full" && (
+                  <TableCell>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={() => handleDeleteItem(it.id)}
+                    >
+                      <Trash2 size={14} />
+                    </Button>
+                  </TableCell>
+                )}
               </TableRow>
             ))}
           </TableBody>
@@ -164,7 +254,7 @@ function FoodMenu() {
   );
 }
 
-function Billing({ settings, draft, setDraft }) {
+function Billing({ draft, setDraft }) {
   const [entryCode, setEntryCode] = useState("");
   const [qty, setQty] = useState(1);
   const [preview, setPreview] = useState(null);
@@ -173,23 +263,17 @@ function Billing({ settings, draft, setDraft }) {
   const header = draft.header;
   const lines = draft.lines || [];
 
-  // Auto-fill waiter and bill number when table changes
   const onHeaderChange = (patch) => {
     const h = { ...header, ...patch };
     if (patch.table_no !== undefined) {
       h.waiter_no = patch.table_no;
-      // Default bill no mirrors waiter no unless user had already set it
       if (!h.bill_number || h.bill_number === header.bill_number) {
         h.bill_number = patch.table_no;
       }
     }
-    setDraft({ ...draft, header: h });
-    try {
-      localStorage.setItem(
-        "billingDraft",
-        JSON.stringify({ ...draft, header: h })
-      );
-    } catch {}
+    const newDraft = { ...draft, header: h };
+    setDraft(newDraft);
+    localStorage.setItem("billingDraft", JSON.stringify(newDraft));
   };
 
   useEffect(() => {
@@ -224,9 +308,7 @@ function Billing({ settings, draft, setDraft }) {
       };
       const updated = { ...draft, lines: [...lines, newLine] };
       setDraft(updated);
-      try {
-        localStorage.setItem("billingDraft", JSON.stringify(updated));
-      } catch {}
+      localStorage.setItem("billingDraft", JSON.stringify(updated));
       setEntryCode("");
       setQty(1);
       setPreview(null);
@@ -239,27 +321,22 @@ function Billing({ settings, draft, setDraft }) {
     if (newQty < 1) newQty = 1;
     const updatedLines = lines.map((l, i) => {
       if (i !== index) return l;
-      const unit = l.unit_price;
       return {
         ...l,
         quantity: newQty,
-        line_total: +(unit * newQty).toFixed(2),
+        line_total: +(l.unit_price * newQty).toFixed(2),
       };
     });
     const updated = { ...draft, lines: updatedLines };
     setDraft(updated);
-    try {
-      localStorage.setItem("billingDraft", JSON.stringify(updated));
-    } catch {}
+    localStorage.setItem("billingDraft", JSON.stringify(updated));
   };
 
   const removeLine = (index) => {
     const updatedLines = lines.filter((_, i) => i !== index);
     const updated = { ...draft, lines: updatedLines };
     setDraft(updated);
-    try {
-      localStorage.setItem("billingDraft", JSON.stringify(updated));
-    } catch {}
+    localStorage.setItem("billingDraft", JSON.stringify(updated));
   };
 
   const subtotal = useMemo(
@@ -272,33 +349,22 @@ function Billing({ settings, draft, setDraft }) {
   const createBill = async () => {
     const h = header;
     if (!h.table_no || !h.party_no || !h.waiter_no || !h.section) {
-      toast.error("Enter table, party, waiter and section");
-      return;
+      return toast.error("Enter table, party, waiter and section");
     }
     if (lines.length === 0) {
-      toast.error("Add at least one item");
-      return;
+      return toast.error("Add at least one item");
     }
     try {
       const payload = {
-        header: {
-          table_no: h.table_no,
-          party_no: h.party_no,
-          waiter_no: h.waiter_no,
-          section: h.section,
-          bill_number: h.bill_number || h.waiter_no,
-        },
+        header: { ...h, bill_number: h.bill_number || h.waiter_no },
         item_codes: lines.map((l) => l.code),
         quantities: lines.map((l) => l.quantity),
       };
       const res = await axios.post(`${API}/bill`, payload);
       toast.success("Bill created");
-      window.printBillData = { ...res.data, settings };
-      try {
-        localStorage.removeItem("billingDraft");
-      } catch {}
+      window.printBillData = res.data; // Use the direct response from the backend
+      localStorage.removeItem("billingDraft");
       setTimeout(() => window.print(), 200);
-      // Clear draft after initiating print
       setDraft({
         header: {
           table_no: "",
@@ -374,9 +440,7 @@ function Billing({ settings, draft, setDraft }) {
               <Input value={header.waiter_no || ""} readOnly />
             </div>
           </div>
-
           <Separator className="my-3" />
-
           <div className="grid grid-cols-6 gap-3 items-end">
             <div className="col-span-3">
               <Label>Item Code (alpha or numeric)</Label>
@@ -411,7 +475,6 @@ function Billing({ settings, draft, setDraft }) {
               </Button>
             </div>
           </div>
-
           {preview && (
             <div className="rounded-md border bg-amber-50 px-4 py-2 text-sm">
               <div className="flex justify-between">
@@ -420,18 +483,11 @@ function Billing({ settings, draft, setDraft }) {
                 </div>
                 <div>Rate now: ₹ {effectiveRate}</div>
               </div>
-              <div className="mt-1 grid grid-cols-3 gap-2">
-                <div>Fixed: ₹ {preview.price_fixed}</div>
-                <div>General: ₹ {preview.price_general}</div>
-                <div>AC: ₹ {preview.price_ac}</div>
-              </div>
             </div>
           )}
-
           <Table className="mt-3">
             <TableHeader>
               <TableRow>
-                <TableHead>Code</TableHead>
                 <TableHead>Item</TableHead>
                 <TableHead className="text-right">Qty</TableHead>
                 <TableHead className="text-right">Rate</TableHead>
@@ -442,35 +498,11 @@ function Billing({ settings, draft, setDraft }) {
             <TableBody>
               {lines.map((l, idx) => (
                 <TableRow key={idx}>
-                  <TableCell>{l.code}</TableCell>
                   <TableCell>{l.name}</TableCell>
+                  <TableCell className="text-right">{l.quantity}</TableCell>
                   <TableCell className="text-right">
-                    <div className="flex items-center justify-end gap-2">
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => updateQty(idx, l.quantity - 1)}
-                      >
-                        <Minus size={14} />
-                      </Button>
-                      <Input
-                        className="w-16 text-right"
-                        type="number"
-                        min={1}
-                        value={l.quantity}
-                        onChange={(e) =>
-                          updateQty(idx, parseInt(e.target.value || "1", 10))
-                        }
-                      />
-                      <Button
-                        size="sm"
-                        onClick={() => updateQty(idx, l.quantity + 1)}
-                      >
-                        <Plus size={14} />
-                      </Button>
-                    </div>
+                    ₹ {l.unit_price.toFixed(2)}
                   </TableCell>
-                  <TableCell className="text-right">₹ {l.unit_price}</TableCell>
                   <TableCell className="text-right">
                     ₹ {l.line_total.toFixed(2)}
                   </TableCell>
@@ -486,7 +518,7 @@ function Billing({ settings, draft, setDraft }) {
                 </TableRow>
               ))}
               <TableRow>
-                <TableCell colSpan={5} className="text-right font-medium">
+                <TableCell colSpan={4} className="text-right font-medium">
                   Subtotal
                 </TableCell>
                 <TableCell className="text-right">
@@ -494,13 +526,13 @@ function Billing({ settings, draft, setDraft }) {
                 </TableCell>
               </TableRow>
               <TableRow>
-                <TableCell colSpan={5} className="text-right font-medium">
+                <TableCell colSpan={4} className="text-right font-medium">
                   Tax 5%
                 </TableCell>
                 <TableCell className="text-right">₹ {tax.toFixed(2)}</TableCell>
               </TableRow>
               <TableRow>
-                <TableCell colSpan={5} className="text-right font-semibold">
+                <TableCell colSpan={4} className="text-right font-semibold">
                   Grand Total
                 </TableCell>
                 <TableCell className="text-right font-semibold">
@@ -509,7 +541,6 @@ function Billing({ settings, draft, setDraft }) {
               </TableRow>
             </TableBody>
           </Table>
-
           <div className="flex justify-end gap-2 mt-3">
             <Button onClick={createBill} className="gap-2">
               <Printer size={16} /> Print Bill
@@ -517,32 +548,25 @@ function Billing({ settings, draft, setDraft }) {
           </div>
         </CardContent>
       </Card>
-
-      {/* Print styles */}
       <div className="print-area hidden print:block">
-        <BillPrint settings={settings} />
+        <BillPrint />
       </div>
     </div>
   );
 }
 
-function BillPrint({ settings }) {
+function BillPrint() {
   const data = (typeof window !== "undefined" && window.printBillData) || null;
-  const cfg =
-    settings ||
-    (typeof window !== "undefined"
-      ? JSON.parse(localStorage.getItem("settings") || "{}")
-      : {});
   if (!data) return null;
   return (
     <div className="print-receipt">
       <div className="text-center font-bold text-base">{data.hotel_name}</div>
-      {cfg?.address ? (
-        <div className="text-center text-xs">{cfg.address}</div>
-      ) : null}
+      {data.address && (
+        <div className="text-center text-xs">{data.address}</div>
+      )}
       <div className="text-center text-xs">
-        GST Included{cfg?.gstin ? ` • GSTIN: ${cfg.gstin}` : ""}
-        {cfg?.phone ? ` • Ph: ${cfg.phone}` : ""}
+        GST Included{data.gstin ? ` • GSTIN: ${data.gstin}` : ""}
+        {data.phone ? ` • Ph: ${data.phone}` : ""}
       </div>
       <div className="divider" />
       <div className="row">
@@ -561,10 +585,6 @@ function BillPrint({ settings }) {
         <span>Waiter</span>
         <span>{data.header.waiter_no}</span>
       </div>
-      <div className="row">
-        <span>Section</span>
-        <span>{data.header.section}</span>
-      </div>
       <div className="divider" />
       <table className="w-full text-xs">
         <thead>
@@ -580,7 +600,7 @@ function BillPrint({ settings }) {
             <tr key={i}>
               <td>{it.name}</td>
               <td className="text-right">{it.quantity}</td>
-              <td className="text-right">{it.unit_price}</td>
+              <td className="text-right">{it.unit_price.toFixed(2)}</td>
               <td className="text-right">{it.line_total.toFixed(2)}</td>
             </tr>
           ))}
@@ -623,7 +643,7 @@ function SettingsEditor({ settings, onChange, canEdit }) {
     <Card className="bg-white/80 backdrop-blur">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <Save size={16} /> Receipt Settings (Admin Full)
+          <Save size={16} /> Receipt Settings
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -670,224 +690,32 @@ function SettingsEditor({ settings, onChange, canEdit }) {
   );
 }
 
-function CredentialsManager() {
-  const [rows, setRows] = useState([]);
-  const [form, setForm] = useState({
-    staff_code: "",
-    role: "clerk",
-    password: "",
-    password_l1: "",
-    password_root: "",
-    active: true,
-  });
+function AdminPanel({ mode }) {
+  const [settings, setSettings] = useState(null);
 
-  const load = async () => {
+  const loadSettings = async () => {
     try {
-      const res = await axios.get(`${API}/credentials`);
-      setRows(res.data);
+      const res = await axios.get(`${API}/settings`);
+      setSettings(res.data);
     } catch {}
   };
+
   useEffect(() => {
-    load();
-  }, []);
-
-  const add = async () => {
-    try {
-      const payload = {
-        ...form,
-        staff_code: (form.staff_code || "").toUpperCase(),
-      };
-      const res = await axios.post(`${API}/credentials`, payload);
-      toast.success("Credential added");
-      setForm({
-        staff_code: "",
-        role: "clerk",
-        password: "",
-        password_l1: "",
-        password_root: "",
-        active: true,
-      });
-      load();
-    } catch (e) {
-      toast.error(e?.response?.data?.detail || "Failed to add");
+    if (mode === "admin-full") {
+      loadSettings();
     }
-  };
-  const del = async (id) => {
-    try {
-      await axios.delete(`${API}/credentials/${id}`);
-      toast.success("Deleted");
-      load();
-    } catch {}
-  };
-  const toggleActive = async (id, active) => {
-    try {
-      await axios.put(`${API}/credentials/${id}`, { active: !active });
-      load();
-    } catch {}
-  };
-  const editRow = async (r) => {
-    try {
-      const newRole = window.prompt("Role (clerk/admin)", r.role) || r.role;
-      let payload = { role: newRole };
-      if (newRole === "admin") {
-        const l1 = window.prompt("Admin L1 password (blank to keep)", "");
-        const root = window.prompt("Admin ROOT password (blank to keep)", "");
-        if (l1 !== null && l1 !== "") payload.password_l1 = l1;
-        if (root !== null && root !== "") payload.password_root = root;
-      } else {
-        const pw = window.prompt(
-          "Clerk password (blank to clear)",
-          r.password || ""
-        );
-        if (pw !== null) payload.password = pw; // allow empty to clear
-      }
-      await axios.put(`${API}/credentials/${r.id}`, payload);
-      toast.success("Updated");
-      load();
-    } catch (e) {
-      toast.error(e?.response?.data?.detail || "Failed to update");
-    }
-  };
+  }, [mode]);
 
-  return (
-    <Card className="bg-white/80 backdrop-blur">
-      <CardHeader>
-        <CardTitle>Credentials</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="grid grid-cols-6 gap-2 items-end">
-          <div className="col-span-1">
-            <Label>Code</Label>
-            <Input
-              value={form.staff_code}
-              onChange={(e) => setForm({ ...form, staff_code: e.target.value })}
-              placeholder="3 letters"
-            />
-          </div>
-          <div className="col-span-1">
-            <Label>Role</Label>
-            <Select
-              value={form.role}
-              onValueChange={(v) => setForm({ ...form, role: v })}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Role" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="clerk">clerk</SelectItem>
-                <SelectItem value="admin">admin</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          {form.role === "clerk" ? (
-            <div className="col-span-2">
-              <Label>Clerk Password (optional)</Label>
-              <Input
-                value={form.password}
-                onChange={(e) => setForm({ ...form, password: e.target.value })}
-              />
-            </div>
-          ) : (
-            <>
-              <div className="col-span-2">
-                <Label>Admin L1 Password</Label>
-                <Input
-                  value={form.password_l1}
-                  onChange={(e) =>
-                    setForm({ ...form, password_l1: e.target.value })
-                  }
-                />
-              </div>
-              <div className="col-span-2">
-                <Label>Admin Root Password</Label>
-                <Input
-                  value={form.password_root}
-                  onChange={(e) =>
-                    setForm({ ...form, password_root: e.target.value })
-                  }
-                />
-              </div>
-            </>
-          )}
-          <div className="col-span-1 flex justify-end">
-            <Button onClick={add}>Add</Button>
-          </div>
-        </div>
-
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Code</TableHead>
-              <TableHead>Role</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rows.map((r) => (
-              <TableRow key={r.id}>
-                <TableCell>{r.staff_code}</TableCell>
-                <TableCell>{r.role}</TableCell>
-                <TableCell>{r.active ? "active" : "inactive"}</TableCell>
-                <TableCell className="text-right flex gap-2 justify-end">
-                  <Button
-                    variant="secondary"
-                    onClick={() => toggleActive(r.id, r.active)}
-                  >
-                    {r.active ? "Disable" : "Enable"}
-                  </Button>
-                  <Button onClick={() => editRow(r)}>Edit</Button>
-                  <Button
-                    variant="destructive"
-                    onClick={() => del(r.id)}
-                    className="gap-1"
-                  >
-                    <Trash2 size={14} /> Delete
-                  </Button>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </CardContent>
-    </Card>
-  );
-}
-
-function AdminPanel({ mode, settings, onSettings }) {
-  const isAdmin = mode === "admin-limited" || mode === "admin-full";
+  const isAdmin = mode.includes("admin");
   if (!isAdmin) return null;
-  const entries = [
-    "pending",
-    "update",
-    "rectify",
-    "reindex",
-    "create",
-    "report",
-  ];
   return (
     <div className="space-y-4">
-      <Card className="bg-white/80 backdrop-blur">
-        <CardHeader>
-          <CardTitle>Admin Actions ({mode})</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <ul className="list-disc ml-5">
-            {entries.map((e) => (
-              <li key={e}>{e}</li>
-            ))}
-          </ul>
-        </CardContent>
-      </Card>
-      {mode === "admin-full" && (
-        <>
-          <SettingsEditor
-            settings={settings}
-            onChange={onSettings}
-            canEdit={true}
-          />
-          <CredentialsManager />
-        </>
+      {mode === "admin-full" && settings && (
+        <SettingsEditor
+          settings={settings}
+          onChange={setSettings}
+          canEdit={true}
+        />
       )}
     </div>
   );
@@ -895,8 +723,7 @@ function AdminPanel({ mode, settings, onSettings }) {
 
 function App() {
   const { mode, setMode } = useAdminMode();
-  const isAdmin = mode === "admin-limited" || mode === "admin-full";
-  const [settings, setSettings] = useState(null);
+  const isAdmin = mode.includes("admin");
   const [billingDraft, setBillingDraft] = useState(() => {
     try {
       return (
@@ -925,25 +752,6 @@ function App() {
     }
   });
 
-  const loadSettings = async () => {
-    try {
-      const res = await axios.get(`${API}/settings`);
-      setSettings(res.data);
-      if (typeof window !== "undefined") {
-        window.__settings__ = res.data;
-        try {
-          localStorage.setItem("settings", JSON.stringify(res.data));
-        } catch {}
-      }
-    } catch (e) {
-      /* ignore */
-    }
-  };
-
-  useEffect(() => {
-    loadSettings();
-  }, []);
-
   return (
     <div className="min-h-screen bg-gradient-to-b from-amber-50 to-orange-50 text-neutral-800">
       <Toaster position="top-right" />
@@ -952,54 +760,38 @@ function App() {
           <h1 className="text-2xl font-semibold tracking-tight">
             Udupi Anand Bhavan — Billing System
           </h1>
-          <p className="text-sm text-neutral-600">Charminar, Hyderabad</p>
         </div>
-
         {mode === "none" ? (
           <div className="max-w-3xl">
             <LoginPanel onMode={setMode} />
           </div>
         ) : (
-          <>
-            <Tabs defaultValue="billing" className="">
-              <TabsList className="bg-white/70 backdrop-blur border">
-                <TabsTrigger value="billing" className="gap-1">
-                  <FileText size={14} /> Billing
-                </TabsTrigger>
-                <TabsTrigger value="menu" className="gap-1">
-                  <ListOrdered size={14} /> Food Menu
-                </TabsTrigger>
-                {isAdmin && (
-                  <TabsTrigger value="admin" className="gap-1">
-                    <LockKeyhole size={14} /> Admin
-                  </TabsTrigger>
-                )}
-              </TabsList>
-              <TabsContent value="billing" className="mt-4">
-                <Billing
-                  settings={settings}
-                  draft={billingDraft}
-                  setDraft={setBillingDraft}
-                />
-              </TabsContent>
-              <TabsContent value="menu" className="mt-4">
-                <FoodMenu />
-              </TabsContent>
+          <Tabs defaultValue="billing" className="">
+            <TabsList className="bg-white/70 backdrop-blur border">
+              <TabsTrigger value="billing" className="gap-1">
+                <FileText size={14} /> Billing
+              </TabsTrigger>
+              <TabsTrigger value="menu" className="gap-1">
+                <ListOrdered size={14} /> Food Menu
+              </TabsTrigger>
               {isAdmin && (
-                <TabsContent value="admin" className="mt-4">
-                  <AdminPanel
-                    mode={mode}
-                    settings={settings}
-                    onSettings={(s) => {
-                      setSettings(s);
-                      if (typeof window !== "undefined")
-                        window.__settings__ = s;
-                    }}
-                  />
-                </TabsContent>
+                <TabsTrigger value="admin" className="gap-1">
+                  <LockKeyhole size={14} /> Admin
+                </TabsTrigger>
               )}
-            </Tabs>
-          </>
+            </TabsList>
+            <TabsContent value="billing" className="mt-4">
+              <Billing draft={billingDraft} setDraft={setBillingDraft} />
+            </TabsContent>
+            <TabsContent value="menu" className="mt-4">
+              <FoodMenu mode={mode} />
+            </TabsContent>
+            {isAdmin && (
+              <TabsContent value="admin" className="mt-4">
+                <AdminPanel mode={mode} />
+              </TabsContent>
+            )}
+          </Tabs>
         )}
       </div>
     </div>
