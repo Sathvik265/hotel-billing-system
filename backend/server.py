@@ -54,8 +54,9 @@ class BillItem(BaseModel):
 class BillHeader(BaseModel):
     table_no: str
     party_no: str
-    section: Literal['AC', 'G']
-    bill_number: Optional[str] = None
+    section: Literal['AC', 'G', 'P']
+    bill_number: Optional[int] = None
+    track: Optional[str] = None
 
 class Bill(BaseModel):
     id: str
@@ -92,7 +93,6 @@ class SettingsUpdate(BaseModel):
     gstin: Optional[str] = None
     phone: Optional[str] = None
     address: Optional[str] = None
-
 
 def get_settings_doc():
     conn = get_db_connection()
@@ -161,8 +161,9 @@ class BillCreateRequest(BaseModel):
     class Header(BaseModel):
         table_no: str
         party_no: str
-        section: Literal['AC', 'G']
+        section: Literal['AC', 'G', 'P']
         bill_number: Optional[str] = None
+        track: str
     header: Header
     item_codes: List[str]
     quantities: List[int]
@@ -177,62 +178,107 @@ async def create_bill(payload: BillCreateRequest):
     conn = get_db_connection()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-    price_field = 'price_ac' if payload.header.section == 'AC' else 'price_general'
-    items: List[BillItem] = []
-    subtotal = 0.0
-
-    for code, qty in zip(payload.item_codes, payload.quantities):
-        cursor.execute("SELECT * FROM menu WHERE alpha_code = %s OR numeric_code = %s", (code.upper(), code.upper()))
-        item_data = cursor.fetchone()
-        if not item_data:
-            cursor.close()
-            conn.close()
-            raise HTTPException(status_code=404, detail=f'Item not found: {code}')
+    try:
+        cursor.execute(
+            """
+            SELECT COALESCE(MAX(bill_number::INTEGER), 0) as max_bill_number 
+            FROM bills 
+            WHERE bill_date = %s
+            """,
+            (payload.bill_date,)
+        )
+        result = cursor.fetchone()
         
-        unit_price = float(item_data[price_field])
-        line_total = round(unit_price * qty, 2)
-        subtotal += line_total
-        items.append(BillItem(code=code.upper(), name=item_data['name'], quantity=qty, unit_price=unit_price, line_total=line_total))
+        new_bill_number = result['max_bill_number'] + 1
+        
+        price_field = 'price_ac' if payload.header.section == 'AC' else 'price_general'
+        items: List[BillItem] = []
+        subtotal = 0.0
 
-    subtotal = round(subtotal, 2)
-    tax_percent = 5.0
-    tax_amount = round(subtotal * tax_percent / 100.0, 2)
-    grand_total = round(subtotal + tax_amount, 2)
-    bill_no = payload.header.bill_number
-    bill_id = str(uuid.uuid4())
-    created_at = datetime.now(TZ)
+        for code, qty in zip(payload.item_codes, payload.quantities):
+            cursor.execute("SELECT * FROM menu WHERE alpha_code = %s OR numeric_code = %s", (code.upper(), code.upper()))
+            item_data = cursor.fetchone()
+            if not item_data:
+                raise HTTPException(status_code=404, detail=f'Item not found: {code}')
+            
+            final_price = float(item_data[price_field])
+            unit_price = round(final_price / 1.05, 2)
+            
+            line_total = round(unit_price * qty, 2)
+            subtotal += line_total
+            items.append(BillItem(code=code.upper(), name=item_data['name'], quantity=qty, unit_price=unit_price, line_total=line_total))
+
+        subtotal = round(subtotal, 2)
+        tax_percent = 5.0
+        tax_amount = round(subtotal * tax_percent / 100.0, 2)
+        grand_total = round(subtotal + tax_amount, 2)
+        bill_id = str(uuid.uuid4())
+        created_at = datetime.now(TZ)
+        
+        items_json = json.dumps([item.dict() for item in items])
+        
+        cursor.execute(
+            """
+            INSERT INTO bills (id, table_number, party_number, bill_number, section, items_ordered, total_amount, created_at, bill_date, modified_from_bill_id, track)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (bill_id, payload.header.table_no, payload.header.party_no, new_bill_number, payload.header.section, items_json, grand_total, created_at, payload.bill_date, payload.modified_from_bill_id, payload.header.track)
+        )
+        conn.commit()
+
+        settings = get_settings_doc()
+
+        bill = Bill(
+            id=bill_id,
+            header=BillHeader(
+                table_no=payload.header.table_no,
+                party_no=payload.header.party_no,
+                section=payload.header.section,
+                bill_number=new_bill_number,
+                track=payload.header.track
+            ),
+            items=items,
+            subtotal=subtotal,
+            tax_percent=tax_percent,
+            tax_amount=tax_amount,
+            grand_total=grand_total,
+            created_at=created_at.isoformat(),
+            bill_date=payload.bill_date,
+            hotel_name=settings.get('hotel_name', DEFAULT_HOTEL_NAME),
+            gstin=settings.get('gstin', ""),
+            phone=settings.get('phone', ""),
+            address=settings.get('address', ""),
+            modified_from_bill_id=payload.modified_from_bill_id
+        )
+        return bill
     
-    items_json = json.dumps([item.dict() for item in items])
-    cursor.execute(
-        """
-        INSERT INTO bills (id, table_number, party_number, bill_number, section, items_ordered, total_amount, created_at, bill_date, modified_from_bill_id)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """,
-        (bill_id, payload.header.table_no, payload.header.party_no, bill_no, payload.header.section, items_json, grand_total, created_at, payload.bill_date, payload.modified_from_bill_id)
-    )
-    conn.commit()
-    cursor.close()
-    conn.close()
+    except (psycopg2.Error, ValueError) as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    
+    finally:
+        cursor.close()
+        conn.close()
 
-    settings = get_settings_doc()
-
-    bill = Bill(
-        id=bill_id,
-        header=BillHeader(**payload.header.dict()),
-        items=items,
-        subtotal=subtotal,
-        tax_percent=tax_percent,
-        tax_amount=tax_amount,
-        grand_total=grand_total,
-        created_at=created_at.isoformat(),
-        bill_date=payload.bill_date,
-        hotel_name=settings.get('hotel_name', DEFAULT_HOTEL_NAME),
-        gstin=settings.get('gstin', ""),
-        phone=settings.get('phone', ""),
-        address=settings.get('address', ""),
-        modified_from_bill_id=payload.modified_from_bill_id
-    )
-    return bill
+@api.get('/bill/next_number', response_model=dict)
+async def get_next_bill_number(bill_date: date):
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cursor.execute(
+            """
+            SELECT COALESCE(MAX(bill_number::INTEGER), 0) as max_bill_number 
+            FROM bills 
+            WHERE bill_date = %s
+            """,
+            (bill_date,)
+        )
+        result = cursor.fetchone()
+        next_number = result['max_bill_number'] + 1
+        return {"bill_number": next_number}
+    finally:
+        cursor.close()
+        conn.close()
 
 @api.get('/bills/by_date', response_model=List[Bill])
 async def get_bills_by_date(bill_date: date):
@@ -249,19 +295,21 @@ async def get_bills_by_date(bill_date: date):
     settings = get_settings_doc()
     bills = []
     for bill_data in bills_data:
-        subtotal_calc = float(bill_data['total_amount']) / 1.05 if bill_data['total_amount'] is not None else 0
+        subtotal_calc = round(float(bill_data['total_amount']) / 1.05 if bill_data['total_amount'] is not None else 0, 2)
+        tax_calc = round(float(bill_data['total_amount']) - subtotal_calc if bill_data['total_amount'] is not None else 0, 2)
         bills.append(Bill(
             id=str(bill_data['id']),
             header=BillHeader(
                 table_no=bill_data['table_number'],
                 party_no=bill_data['party_number'],
                 section=bill_data['section'],
-                bill_number=bill_data['bill_number']
+                bill_number=bill_data['bill_number'],
+                track=bill_data.get('track')
             ),
             items=[BillItem(**item) for item in (bill_data['items_ordered'] or [])],
             subtotal=subtotal_calc,
             tax_percent=5.0,
-            tax_amount=float(bill_data['total_amount']) - subtotal_calc if bill_data['total_amount'] is not None else 0,
+            tax_amount=tax_calc,
             grand_total=float(bill_data['total_amount'] or 0),
             created_at=bill_data['created_at'].isoformat(),
             bill_date=bill_data['bill_date'],
@@ -288,19 +336,21 @@ async def get_last_bill(table_no: str, bill_date: date):
         raise HTTPException(status_code=404, detail="No bill found for this table on the given date")
 
     settings = get_settings_doc()
-    subtotal_calc = float(bill_data['total_amount']) / 1.05 if bill_data['total_amount'] is not None else 0
+    subtotal_calc = round(float(bill_data['total_amount']) / 1.05 if bill_data['total_amount'] is not None else 0, 2)
+    tax_calc = round(float(bill_data['total_amount']) - subtotal_calc if bill_data['total_amount'] is not None else 0, 2)
     bill = Bill(
         id=str(bill_data['id']),
         header=BillHeader(
             table_no=bill_data['table_number'],
             party_no=bill_data['party_number'],
             section=bill_data['section'],
-            bill_number=bill_data['bill_number']
+            bill_number=bill_data['bill_number'],
+            track=bill_data.get('track')
         ),
         items=[BillItem(**item) for item in (bill_data['items_ordered'] or [])],
         subtotal=subtotal_calc,
         tax_percent=5.0,
-        tax_amount=float(bill_data['total_amount']) - subtotal_calc if bill_data['total_amount'] is not None else 0,
+        tax_amount=tax_calc,
         grand_total=float(bill_data['total_amount'] or 0),
         created_at=bill_data['created_at'].isoformat(),
         bill_date=bill_data['bill_date'],
@@ -312,6 +362,36 @@ async def get_last_bill(table_no: str, bill_date: date):
     )
     return bill
 
+@api.get('/settings', response_model=Settings)
+async def get_settings():
+    return get_settings_doc()
+
+@api.put('/settings', response_model=Settings)
+async def update_settings(payload: SettingsUpdate):
+    settings_doc = get_settings_doc()
+    settings_id = settings_doc['id']
+
+    update_data = payload.dict(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    set_query = ", ".join(f"{key} = %s" for key in update_data)
+    sql = f"UPDATE settings SET {set_query} WHERE id = %s RETURNING *"
+    
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cursor.execute(sql, (*update_data.values(), settings_id))
+        updated = cursor.fetchone()
+        conn.commit()
+        if not updated:
+            raise HTTPException(status_code=404, detail="Settings not found after update")
+        return updated
+    finally:
+        cursor.close()
+        conn.close()
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
@@ -320,4 +400,3 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(api)
-
