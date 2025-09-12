@@ -29,19 +29,24 @@ import {
   Plus,
   History,
   Edit,
+  View,
+  Loader2,
 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "./components/ui/dialog";
 
-// Hardcoded the backend URL to resolve the 'process is not defined' error.
 const BACKEND_URL = "http://127.0.0.1:8000";
 const API = `${BACKEND_URL}/api`;
 
-function useAdminMode() {
-  const [mode, setMode] = useState("none");
-  return { mode, setMode };
-}
-
-function LoginPanel({ onMode }) {
+function LoginPanel({ onLogin, onStartAdminVerification }) {
   const [credential, setCredential] = useState("");
+  const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
+  const [track, setTrack] = useState("");
 
   const handleKeyDown = (event) => {
     if (event.key === "Enter") {
@@ -51,19 +56,39 @@ function LoginPanel({ onMode }) {
   };
 
   const submit = async (isRoot = false) => {
+    if (!date || !track) {
+      toast.error("Please select a date and track.");
+      return;
+    }
+
+    const validTracks = ["`", "``", "RBS1", "RBS2"];
+    if (
+      !validTracks.map((t) => t.toUpperCase()).includes(track.toUpperCase())
+    ) {
+      toast.error(
+        "Invalid track selected. Valid tracks are ' ', '  ', 'RBS1', 'RBS2'."
+      );
+      return;
+    }
+
+    if (credential.toUpperCase() === "SHI" && isRoot) {
+      onStartAdminVerification(date, track);
+      return;
+    }
+
     try {
       const res = await axios.post(`${API}/auth/login`, {
         staff_code: credential,
         is_root: isRoot,
       });
-      onMode(res.data.mode);
+      onLogin(res.data.mode, date, track);
       toast.success(
         res.data.mode.includes("admin")
           ? `Logged in as ${res.data.mode}`
           : "Clerk mode"
       );
     } catch (e) {
-      onMode("none");
+      onLogin("none", null, null);
       toast.error(e?.response?.data?.detail || "Invalid login");
     }
   };
@@ -86,6 +111,26 @@ function LoginPanel({ onMode }) {
             onKeyDown={handleKeyDown}
           />
         </div>
+        <div className="grid grid-cols-3 items-center gap-3">
+          <Label className="text-sm">Date</Label>
+          <Input
+            type="date"
+            className="col-span-2"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            onKeyDown={handleKeyDown}
+          />
+        </div>
+        <div className="grid grid-cols-3 items-center gap-3">
+          <Label className="text-sm">Track</Label>
+          <Input
+            placeholder="e.g., RBS1"
+            className="col-span-2"
+            value={track}
+            onChange={(e) => setTrack(e.target.value)}
+            onKeyDown={handleKeyDown}
+          />
+        </div>
         <div className="flex justify-end">
           <Button onClick={() => submit(false)} className="px-5">
             Enter
@@ -102,41 +147,33 @@ function LoginPanel({ onMode }) {
   );
 }
 
-function DateSelection({ onDateSelected }) {
-  const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
+function AdminVerificationScreen({ onVerificationComplete }) {
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.altKey && event.key.toLowerCase() === "a") {
+        event.preventDefault();
+        onVerificationComplete("admin-full");
+      }
+    };
 
-  const handleProceed = () => {
-    if (date) {
-      onDateSelected(date);
-    } else {
-      toast.error("Please select a date.");
-    }
-  };
+    const timer = setTimeout(() => {
+      onVerificationComplete("admin-limited");
+    }, 5000);
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onVerificationComplete]);
 
   return (
-    <Card className="shadow-xl border-0 bg-white/70 backdrop-blur-xl">
-      <CardHeader>
-        <CardTitle className="text-xl flex items-center gap-2">
-          Select Billing Date
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="grid grid-cols-3 items-center gap-3">
-          <Label className="text-sm">Date</Label>
-          <Input
-            type="date"
-            className="col-span-2"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-          />
-        </div>
-        <div className="flex justify-end">
-          <Button onClick={handleProceed} className="px-5">
-            Proceed
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
+    <div className="flex flex-col items-center justify-center min-h-[50vh]">
+      <Loader2 className="h-12 w-12 animate-spin text-orange-500" />
+      <p className="mt-4 text-lg text-neutral-600">Verifying Admin Access...</p>
+      <p className="text-sm text-neutral-500">Press the key combination now</p>
+    </div>
   );
 }
 
@@ -293,46 +330,119 @@ function Billing({
   currentTable,
   setCurrentTable,
   billingDate,
+  activeTab,
+  track,
 }) {
   const [entryCode, setEntryCode] = useState("");
   const [qty, setQty] = useState(1);
   const [preview, setPreview] = useState(null);
   const debounceRef = useRef();
   const tableNoRef = useRef(null);
+  const itemCodeRef = useRef(null);
+  const qtyRef = useRef(null);
+  const printBillRef = useRef(null);
+  const [nextBillNumber, setNextBillNumber] = useState(null);
 
   const currentDraft = useMemo(
     () =>
       drafts[currentTable] || {
-        header: { table_no: currentTable, party_no: "1", section: "G" },
+        header: {
+          table_no: currentTable,
+          party_no: "1",
+          section: "G",
+          track: track,
+        },
         lines: [],
         modified_from_bill_id: null,
       },
-    [drafts, currentTable]
+    [drafts, currentTable, track]
   );
+
+  useEffect(() => {
+    if (activeTab === "billing" && tableNoRef.current) {
+      tableNoRef.current.focus();
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    const handleGlobalKeyDown = (event) => {
+      if (event.key === "End" || event.key === "Home") {
+        event.preventDefault();
+        handlePrintBill();
+      }
+    };
+    window.addEventListener("keydown", handleGlobalKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleGlobalKeyDown);
+    };
+  }, [currentTable, entryCode, qty, currentDraft.lines]);
+
+  const handlePrintBill = async () => {
+    if (!currentTable) {
+      toast.error("Please enter a table number before printing.");
+      return;
+    }
+
+    let finalLines = currentDraft.lines;
+
+    if (document.activeElement === qtyRef.current && entryCode) {
+      const newItem = await addItem(false);
+      if (newItem) {
+        finalLines = [...finalLines, newItem];
+      } else {
+        return;
+      }
+    }
+
+    if (finalLines.length === 0) {
+      toast.error("Please add at least one item to the bill.");
+      return;
+    }
+
+    createBill(finalLines);
+  };
+
+  useEffect(() => {
+    if (billingDate) {
+      const fetchNextBillNumber = async () => {
+        try {
+          const res = await axios.get(`${API}/bill/next_number`, {
+            params: { bill_date: billingDate },
+          });
+          setNextBillNumber(res.data.bill_number);
+        } catch (e) {
+          toast.error("Failed to fetch next bill number.");
+          setNextBillNumber(1);
+        }
+      };
+      fetchNextBillNumber();
+    }
+  }, [billingDate]);
 
   const onHeaderChange = (patch) => {
     const newHeader = { ...currentDraft.header, ...patch };
-    if (patch.table_no !== undefined) {
-      newHeader.bill_number = patch.table_no;
-    }
     const newDraft = { ...currentDraft, header: newHeader };
     setDrafts((prev) => ({ ...prev, [currentTable]: newDraft }));
   };
 
-  useEffect(() => {
-    const handleEsc = (event) => {
-      if (event.key === "Escape") {
-        tableNoRef.current.focus();
-      }
-    };
-    window.addEventListener("keydown", handleEsc);
-    return () => {
-      window.removeEventListener("keydown", handleEsc);
-    };
-  }, []);
+  const setSectionByTable = (tableNo) => {
+    const table = parseInt(tableNo, 10);
+    if (isNaN(table)) return;
+
+    let section = "G";
+    if (table === 1) {
+      section = "P";
+    } else if (table >= 15 && table <= 30) {
+      section = "AC";
+    }
+    onHeaderChange({ section });
+  };
 
   const loadDataForTable = async (tableNo) => {
     if (!tableNo) return;
+
+    setSectionByTable(tableNo);
+
     if (drafts[tableNo]) return;
     try {
       const res = await axios.get(`${API}/bill/last`, {
@@ -356,7 +466,7 @@ function Billing({
             table_no: tableNo,
             party_no: "1",
             section: "G",
-            bill_number: tableNo,
+            bill_number: null,
           },
           lines: [],
         },
@@ -365,7 +475,9 @@ function Billing({
   };
 
   const handleTableNoKeyDown = (event) => {
-    if (event.key === "Enter") {
+    if (event.key === "PageDown") {
+      itemCodeRef.current.focus();
+    } else if (event.key === "Enter") {
       const newTableNo = event.target.value;
       setCurrentTable(newTableNo);
       loadDataForTable(newTableNo);
@@ -389,8 +501,8 @@ function Billing({
     return () => debounceRef.current && clearTimeout(debounceRef.current);
   }, [entryCode]);
 
-  const addItem = async () => {
-    if (!entryCode || !currentTable) return;
+  const addItem = async (focusItemCode = true) => {
+    if (!entryCode || !currentTable) return null;
     try {
       const res = await axios.get(`${API}/menu/lookup/${entryCode}`);
       const item = res.data;
@@ -405,16 +517,22 @@ function Billing({
         unit_price: unit,
         line_total: +(unit * qty).toFixed(2),
       };
-      const updatedLines = [...currentDraft.lines, newLine];
-      setDrafts((prev) => ({
-        ...prev,
-        [currentTable]: { ...currentDraft, lines: updatedLines },
-      }));
-      setEntryCode("");
-      setQty(1);
-      setPreview(null);
+
+      if (focusItemCode) {
+        const updatedLines = [...currentDraft.lines, newLine];
+        setDrafts((prev) => ({
+          ...prev,
+          [currentTable]: { ...currentDraft, lines: updatedLines },
+        }));
+        setEntryCode("");
+        setQty(1);
+        setPreview(null);
+        itemCodeRef.current.focus();
+      }
+      return newLine;
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Item not found");
+      return null;
     }
   };
 
@@ -452,24 +570,18 @@ function Billing({
   const tax = useMemo(() => +(subtotal * 0.05).toFixed(2), [subtotal]);
   const total = useMemo(() => +(subtotal + tax).toFixed(2), [subtotal, tax]);
 
-  const createBill = async () => {
+  const createBill = async (lines) => {
     const h = currentDraft.header;
-    if (!h.table_no || !h.party_no || !h.section) {
-      return toast.error("Enter table, party, and section");
-    }
-    if (currentDraft.lines.length === 0) {
-      return toast.error("Add at least one item");
-    }
     try {
       const payload = {
-        header: { ...h, bill_number: h.bill_number || h.table_no },
-        item_codes: currentDraft.lines.map((l) => l.code),
-        quantities: currentDraft.lines.map((l) => l.quantity),
+        header: { ...h },
+        item_codes: lines.map((l) => l.code),
+        quantities: lines.map((l) => l.quantity),
         bill_date: billingDate,
         modified_from_bill_id: currentDraft.modified_from_bill_id,
       };
       const res = await axios.post(`${API}/bill`, payload);
-      toast.success("Bill created");
+      toast.success(`Bill #${res.data.header.bill_number} created`);
       window.printBillData = res.data;
 
       setDrafts((prev) => {
@@ -478,6 +590,10 @@ function Billing({
         return newDrafts;
       });
       setCurrentTable("");
+      setEntryCode("");
+      setQty(1);
+
+      setNextBillNumber(res.data.header.bill_number + 1);
 
       setTimeout(() => {
         window.print();
@@ -485,6 +601,25 @@ function Billing({
       }, 200);
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Failed to create bill");
+    }
+  };
+
+  const displayBillNumber =
+    currentDraft.header.bill_number != null
+      ? currentDraft.header.bill_number
+      : nextBillNumber;
+
+  const handleItemCodeChange = (e) => {
+    const code = e.target.value;
+    setEntryCode(code);
+    if (code.length === 3) {
+      qtyRef.current.focus();
+    }
+  };
+
+  const handleQtyKeyDown = (e) => {
+    if (e.key === "Enter") {
+      addItem();
     }
   };
 
@@ -517,21 +652,11 @@ function Billing({
             </div>
             <div className="col-span-1">
               <Label>Section</Label>
-              <Input
-                list="sections"
-                value={currentDraft.header.section || "G"}
-                onChange={(e) =>
-                  onHeaderChange({ section: e.target.value.toUpperCase() })
-                }
-              />
-              <datalist id="sections">
-                <option value="G" />
-                <option value="AC" />
-              </datalist>
+              <Input value={currentDraft.header.section || "G"} readOnly />
             </div>
             <div className="col-span-2">
               <Label>Bill No (system)</Label>
-              <Input value={currentDraft.header.bill_number || ""} readOnly />
+              <Input value={displayBillNumber || ""} readOnly />
             </div>
           </div>
           <Separator className="my-3" />
@@ -539,9 +664,10 @@ function Billing({
             <div className="col-span-3">
               <Label>Item Code</Label>
               <Input
+                ref={itemCodeRef}
                 placeholder="e.g., IDL or 101"
                 value={entryCode}
-                onChange={(e) => setEntryCode(e.target.value)}
+                onChange={handleItemCodeChange}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") addItem();
                 }}
@@ -550,14 +676,16 @@ function Billing({
             <div className="col-span-1">
               <Label>Qty</Label>
               <Input
+                ref={qtyRef}
                 type="number"
                 min={1}
                 value={qty}
                 onChange={(e) => setQty(parseInt(e.target.value || "1", 10))}
+                onKeyDown={handleQtyKeyDown}
               />
             </div>
             <div className="col-span-2 flex gap-2">
-              <Button onClick={addItem} disabled={!currentTable}>
+              <Button onClick={() => addItem()} disabled={!currentTable}>
                 Add
               </Button>
               <Button
@@ -577,6 +705,7 @@ function Billing({
           <Table className="mt-3">
             <TableHeader>
               <TableRow>
+                <TableHead className="w-12">No.</TableHead>
                 <TableHead>Item</TableHead>
                 <TableHead className="text-right w-48">Qty</TableHead>
                 <TableHead className="text-right">Rate</TableHead>
@@ -586,6 +715,7 @@ function Billing({
             <TableBody>
               {currentDraft.lines.map((l, idx) => (
                 <TableRow key={idx}>
+                  <TableCell>{idx + 1}</TableCell>
                   <TableCell>{l.name}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-2">
@@ -614,7 +744,7 @@ function Billing({
                 </TableRow>
               ))}
               <TableRow>
-                <TableCell colSpan={3} className="text-right font-medium">
+                <TableCell colSpan={4} className="text-right font-medium">
                   Subtotal
                 </TableCell>
                 <TableCell className="text-right">
@@ -622,13 +752,13 @@ function Billing({
                 </TableCell>
               </TableRow>
               <TableRow>
-                <TableCell colSpan={3} className="text-right font-medium">
+                <TableCell colSpan={4} className="text-right font-medium">
                   Tax 5%
                 </TableCell>
                 <TableCell className="text-right">₹ {tax.toFixed(2)}</TableCell>
               </TableRow>
               <TableRow>
-                <TableCell colSpan={3} className="text-right font-semibold">
+                <TableCell colSpan={4} className="text-right font-semibold">
                   Grand Total
                 </TableCell>
                 <TableCell className="text-right font-semibold">
@@ -639,7 +769,8 @@ function Billing({
           </Table>
           <div className="flex justify-end gap-2 mt-3">
             <Button
-              onClick={createBill}
+              ref={printBillRef}
+              onClick={handlePrintBill}
               className="gap-2"
               disabled={!currentTable}
             >
@@ -654,9 +785,9 @@ function Billing({
     </div>
   );
 }
-
-function RecentBills({ billingDate, onModifyBill }) {
+function RecentBills({ billingDate }) {
   const [bills, setBills] = useState([]);
+  const [viewingBill, setViewingBill] = useState(null);
 
   const loadRecentBills = async () => {
     try {
@@ -676,52 +807,69 @@ function RecentBills({ billingDate, onModifyBill }) {
   }, [billingDate]);
 
   return (
-    <Card className="shadow-md bg-white/80 backdrop-blur">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <History size={18} /> Recent Bills for {billingDate}
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Bill No</TableHead>
-              <TableHead>Table</TableHead>
-              <TableHead>Time</TableHead>
-              <TableHead>Amount</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {bills.map((bill) => (
-              <TableRow key={bill.id}>
-                <TableCell>{bill.header.bill_number}</TableCell>
-                <TableCell>{bill.header.table_no}</TableCell>
-                <TableCell>
-                  {new Date(bill.created_at).toLocaleTimeString()}
-                </TableCell>
-                <TableCell>₹ {bill.grand_total.toFixed(2)}</TableCell>
-                <TableCell className="text-right">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => onModifyBill(bill)}
-                  >
-                    <Edit size={14} className="mr-2" /> Modify
-                  </Button>
-                </TableCell>
+    <>
+      <Card className="shadow-md bg-white/80 backdrop-blur">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <History size={18} /> Recent Bills for {billingDate}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Bill No</TableHead>
+                <TableHead>Table</TableHead>
+                <TableHead>Time</TableHead>
+                <TableHead>Amount</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </CardContent>
-    </Card>
+            </TableHeader>
+            <TableBody>
+              {bills.map((bill) => (
+                <TableRow key={bill.id}>
+                  <TableCell>{bill.header.bill_number}</TableCell>
+                  <TableCell>{bill.header.table_no}</TableCell>
+                  <TableCell>
+                    {new Date(bill.created_at).toLocaleTimeString()}
+                  </TableCell>
+                  <TableCell>₹ {bill.grand_total.toFixed(2)}</TableCell>
+                  <TableCell className="text-right">
+                    <Dialog>
+                      <DialogTrigger asChild>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setViewingBill(bill)}
+                        >
+                          <View size={14} className="mr-2" /> View
+                        </Button>
+                      </DialogTrigger>
+                    </Dialog>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+      {viewingBill && (
+        <Dialog open={!!viewingBill} onOpenChange={() => setViewingBill(null)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Bill Details</DialogTitle>
+            </DialogHeader>
+            <BillPrint billData={viewingBill} />
+          </DialogContent>
+        </Dialog>
+      )}
+    </>
   );
 }
 
-function BillPrint() {
-  const data = (typeof window !== "undefined" && window.printBillData) || null;
+function BillPrint({ billData }) {
+  const data =
+    billData || (typeof window !== "undefined" && window.printBillData) || null;
   if (!data) return null;
   return (
     <div className="print-receipt">
@@ -750,6 +898,7 @@ function BillPrint() {
       <table className="w-full text-xs">
         <thead>
           <tr>
+            <th className="text-left w-12">No.</th>
             <th className="text-left">Item</th>
             <th className="text-right">Qty</th>
             <th className="text-right">Rate</th>
@@ -759,6 +908,7 @@ function BillPrint() {
         <tbody>
           {data.items.map((it, i) => (
             <tr key={i}>
+              <td>{i + 1}</td>
               <td>{it.name}</td>
               <td className="text-right">{it.quantity}</td>
               <td className="text-right">{it.unit_price.toFixed(2)}</td>
@@ -911,32 +1061,33 @@ function AdminPanel({ mode }) {
 }
 
 function App() {
-  const { mode, setMode } = useAdminMode();
+  const [mode, setMode] = useState("none");
   const [billingDate, setBillingDate] = useState(null);
+  const [track, setTrack] = useState("");
+  const [isVerifyingAdmin, setIsVerifyingAdmin] = useState(false);
+
   const isAdmin = mode.includes("admin");
   const [drafts, setDrafts] = useState({});
   const [currentTable, setCurrentTable] = useState("");
   const [activeTab, setActiveTab] = useState("billing");
 
-  const handleDateSelected = (date) => {
+  const handleLogin = (newMode, date, newTrack) => {
+    setMode(newMode);
     setBillingDate(date);
+    setTrack(newTrack);
+    setIsVerifyingAdmin(false);
   };
 
-  const handleModifyBill = (bill) => {
-    const tableNo = bill.header.table_no;
-    setDrafts((prev) => ({
-      ...prev,
-      [tableNo]: {
-        header: bill.header,
-        lines: bill.items,
-        modified_from_bill_id: bill.id,
-      },
-    }));
-    setCurrentTable(tableNo);
-    setActiveTab("billing");
-    toast.info(
-      `Editing bill for table ${tableNo}. A new bill will be created upon printing.`
-    );
+  const handleStartAdminVerification = (date, newTrack) => {
+    setBillingDate(date);
+    setTrack(newTrack);
+    setIsVerifyingAdmin(true);
+  };
+
+  const handleVerificationComplete = (adminMode) => {
+    setMode(adminMode);
+    setIsVerifyingAdmin(false);
+    toast.success(`Logged in as ${adminMode}`);
   };
 
   return (
@@ -949,13 +1100,18 @@ function App() {
           </h1>
         </div>
         {mode === "none" ? (
-          <div className="max-w-3xl">
-            <LoginPanel onMode={setMode} />
-          </div>
-        ) : !billingDate ? (
-          <div className="max-w-3xl">
-            <DateSelection onDateSelected={handleDateSelected} />
-          </div>
+          isVerifyingAdmin ? (
+            <AdminVerificationScreen
+              onVerificationComplete={handleVerificationComplete}
+            />
+          ) : (
+            <div className="max-w-3xl">
+              <LoginPanel
+                onLogin={handleLogin}
+                onStartAdminVerification={handleStartAdminVerification}
+              />
+            </div>
+          )
         ) : (
           <Tabs value={activeTab} onValueChange={setActiveTab} className="">
             <TabsList className="bg-white/70 backdrop-blur border">
@@ -981,16 +1137,15 @@ function App() {
                 currentTable={currentTable}
                 setCurrentTable={setCurrentTable}
                 billingDate={billingDate}
+                activeTab={activeTab}
+                track={track}
               />
             </TabsContent>
             <TabsContent value="menu" className="mt-4">
               <FoodMenu mode={mode} />
             </TabsContent>
             <TabsContent value="recent" className="mt-4">
-              <RecentBills
-                billingDate={billingDate}
-                onModifyBill={handleModifyBill}
-              />
+              <RecentBills billingDate={billingDate} />
             </TabsContent>
             {isAdmin && (
               <TabsContent value="admin" className="mt-4">
